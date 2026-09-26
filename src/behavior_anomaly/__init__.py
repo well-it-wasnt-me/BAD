@@ -7,7 +7,7 @@ The import package stays behavior_anomaly so nobody has to type
 `from bad import Alert` with a straight face.
 """
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"
 
 from behavior_anomaly.config import DetectionConfig, SiemConfig
 from behavior_anomaly.detection.engine import DetectionEngine
