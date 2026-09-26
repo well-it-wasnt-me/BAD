@@ -7,7 +7,7 @@ build-backend = "hatchling.build"
 # dead Android driver on the name "bad" in 2018 and PyPI keeps names forever.
 # The CLI and the executables stay `bad`, which was always the fun part anyway.
 name = "behavior-anomaly-detection"
-version = "0.1.0"
+version = "1.0.0"
 description = "BAD: Behavior Anomaly Detection. Cross-platform user behavior analytics, anomaly detection, and SIEM alerting."
 readme = "README.md"
 license = "MIT"
@@ -52,20 +52,10 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "ruff>=0.6", "mypy>=1.11"]
 docs = ["mkdocs>=1.6"]
-# Tools that produce shippable things: the PyInstaller executables and the
-# sdist/wheel pair that goes to PyPI. Same extra, different artifacts.
-build = ["pyinstaller>=6.10", "build>=1.2"]
+build = ["pyinstaller>=6.10"]
 
 [project.scripts]
 bad = "behavior_anomaly.cli:app"
-
-# The PyPI page gets these links for free. A package page without docs links
-# is a product demo with the lights off.
-[project.urls]
-Homepage = "https://github.com/well-it-wasnt-me/BAD"
-Repository = "https://github.com/well-it-wasnt-me/BAD"
-Documentation = "https://well-it-wasnt-me.github.io/BAD/"
-Changelog = "https://github.com/well-it-wasnt-me/BAD/blob/main/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/behavior_anomaly"]
