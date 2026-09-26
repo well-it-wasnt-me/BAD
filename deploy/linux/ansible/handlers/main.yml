@@ -1,0 +1,8 @@
+# Handlers for the BAD role. Config or binary changes trigger a validation
+# pass: a config that does not validate should fail the play now, not the
+# first scheduled run at 3 AM on someone else's pager.
+
+- name: validate bad config
+  ansible.builtin.command:
+    cmd: "{{ bad_bin_dir }}/bad check-config --config {{ bad_config_dir }}/config.toml"
+  changed_when: false

@@ -1,0 +1,25 @@
+{{ ansible_managed | comment }}
+# BAD config, rendered by the ansible role from the documented example.
+# Every key is optional; these defaults match config.example.toml in the repo.
+# Precedence: built-in defaults < this file < command line flags.
+
+[detection]
+window_seconds = {{ bad_window_seconds }}
+anomaly_threshold = {{ bad_anomaly_threshold }}
+contamination = 0.01
+min_events = {{ bad_min_events }}
+
+[siem]
+kind = "{{ bad_siem_kind }}"
+{% if bad_siem_endpoint is not none %}
+endpoint = "{{ bad_siem_endpoint }}"
+{% endif %}
+{% if bad_siem_api_key is not none %}
+api_key = "{{ bad_siem_api_key }}"
+{% endif %}
+
+[input_dynamics]
+# Timing and motion aggregates ONLY, never keystroke content. There is no
+# option here that enables content capture, on any platform, ever.
+enabled = {{ bad_input_dynamics_enabled | lower }}
+sampler_interval_seconds = 30
