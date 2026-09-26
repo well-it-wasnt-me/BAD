@@ -7,8 +7,10 @@ your SIEM a vendor-neutral alert when they stop doing that. A tool for agents,
 SIEMs and monitoring stacks, not an agent itself.
 
 The import package is `behavior_anomaly`, so nobody ever has to type
-`from bad import Alert` with a straight face. The CLI, the distribution and
-the executables are all `bad`.
+`from bad import Alert` with a straight face. The CLI and the executables are
+`bad`. The pip distribution is `behavior-anomaly-detection`, because someone
+parked a dead Android driver on the name `bad` in 2018 and PyPI keeps names
+forever, like a dragon with worse taste in treasure.
 
 ## The pipeline
 

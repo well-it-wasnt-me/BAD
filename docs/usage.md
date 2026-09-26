@@ -3,7 +3,7 @@
 ## Install
 
 ```bash
-pip install -e .          # or pip install bad from your registry
+pip install -e .          # or pip install behavior-anomaly-detection from your registry
 ```
 
 The CLI is `bad`, and the same pipeline is importable from

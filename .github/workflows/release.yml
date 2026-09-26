@@ -119,3 +119,42 @@ jobs:
         with:
           tag_name: v${{ needs.release.outputs.version }}
           files: artifacts/*
+
+  # PyPI via Trusted Publishing (OIDC): no username, no password, no API token
+  # in any secret anywhere. PyPI trusts one quadruple: this account, this repo,
+  # this workflow file, this environment. A run that proves all four gets to
+  # publish; everything else gets shown the door, tokens included.
+  publish:
+    needs: [release, build]
+    if: needs.release.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      # This is the entire authentication story. The OIDC token is minted by
+      # GitHub, signed, and verified by PyPI. No secret to rotate, no secret
+      # to leak, no secret to find in a public fork by accident.
+      id-token: write
+    steps:
+      # Check out the TAG, not the branch: the published sdist and wheel must
+      # carry the bumped version semantic-release committed, and the tag is
+      # the only ref guaranteed to have it.
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.release.outputs.version }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package with build extras
+        run: pip install -e ".[build]"
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+      # PyPI is immutable: yanked versions cannot be re-uploaded, and 1.0.0
+      # can never be re-released under a different meaning. The gate chain
+      # (CI green -> release -> binaries built) is the only mercy on offer.

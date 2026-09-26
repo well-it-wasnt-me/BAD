@@ -67,6 +67,8 @@ OS collectors / agent JSONL
 Start with [Architecture](architecture.md) for how the layers fit together,
 or [Usage](usage.md) if you just want the thing to run.
 
-The CLI, the distribution and the executables are all `bad`. The import
-package is `behavior_anomaly`, so nobody ever has to type `from bad import
-Alert` with a straight face.
+The CLI, the distribution and the executables are all `bad`, except on PyPI,
+where the distribution is `behavior-anomaly-detection` because the short name
+was squatted in 2018 by an Android driver that has been dead longer than some
+of its users. The import package is `behavior_anomaly`, so nobody ever has to
+type `from bad import Alert` with a straight face.
