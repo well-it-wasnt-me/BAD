@@ -1,0 +1,24 @@
+# MkDocs configuration. Published to GitHub Pages by .github/workflows/docs.yml
+# and buildable by ReadTheDocs via .readthedocs.yaml. One site, two hosts.
+site_name: BAD
+site_description: "BAD: Behavior Anomaly Detection. Cross-platform user behavior analytics, anomaly detection and SIEM alerting."
+
+theme:
+  name: readthedocs
+  highlightjs: true
+
+nav:
+  - Home: index.md
+  - Architecture: architecture.md
+  - Usage: usage.md
+  - Testing and Baselines: testing.md
+  - Event Schema: schema.md
+  - Collectors: collectors.md
+  - SIEM Integration: siem.md
+  - Deployment: deployment.md
+  - Development: development.md
+
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true

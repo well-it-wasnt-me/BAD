@@ -1,0 +1,89 @@
+# BAD ansible role: group membership, config, binary, validation.
+#
+# It installs a binary and drops a config. It does NOT install a service,
+# a timer or a daemon of any kind, because BAD runs when something runs it.
+# If you want a schedule, add your own systemd timer task to your playbook;
+# an example lives in docs/deployment.md.
+
+- name: Ensure auditd is installed and running (the good telemetry)
+  when: bad_ensure_auditd | bool
+  ansible.builtin.package:
+    name: audit
+    state: present
+
+- name: Ensure auditd is enabled at boot
+  when: bad_ensure_auditd | bool
+  ansible.builtin.systemd:
+    name: auditd
+    enabled: true
+    state: started
+
+- name: Add the service user to systemd-journal (collect without root)
+  # Group membership is the boring, correct privilege. sudo in a schedule
+  # is a habit worth breaking.
+  ansible.builtin.user:
+    name: "{{ bad_service_user }}"
+    groups: systemd-journal
+    append: true
+
+- name: Ensure BAD directories exist with sane permissions
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ bad_service_user }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ bad_config_dir }}", owner: "root", mode: "0750" }
+    - { path: "{{ bad_data_dir }}", owner: "{{ bad_service_user }}", mode: "0750" }
+
+- name: Render config.toml from the documented example
+  # Template over config.example.toml: every key visible, every default
+  # documented, nothing hidden in jinja cleverness.
+  ansible.builtin.template:
+    src: config.toml.j2
+    dest: "{{ bad_config_dir }}/config.toml"
+    owner: root
+    group: "{{ bad_service_user }}"
+    mode: "0640"
+  notify: validate bad config
+
+- name: Resolve the latest BAD release version (once)
+  when: bad_version == "latest"
+  ansible.builtin.uri:
+    url: "{{ bad_repo_url }}/releases/latest"
+    follow_redirects: none
+  register: bad_latest_redirect
+  changed_when: false
+
+- name: Pin the resolved version for the download URL
+  when: bad_version == "latest"
+  ansible.builtin.set_fact:
+    bad_resolved_version: "{{ bad_latest_redirect.location | regex_search('tag/(.+)$', '\\1') | first }}"
+
+- name: Set pinned version fact
+  when: bad_version != "latest"
+  ansible.builtin.set_fact:
+    bad_resolved_version: "{{ bad_version }}"
+
+- name: Install the BAD binary
+  ansible.builtin.get_url:
+    url: "{{ bad_repo_url }}/releases/download/{{ bad_resolved_version }}/bad-linux"
+    dest: "{{ bad_bin_dir }}/bad"
+    owner: root
+    group: root
+    mode: "0755"
+  notify: validate bad config
+
+- name: Verify the binary runs (fail the play, not the 3 AM schedule)
+  ansible.builtin.command:
+    cmd: "{{ bad_bin_dir }}/bad --help"
+  changed_when: false
+
+- name: Verify the config validates
+  # The same check the handler runs, but here so a bad template fails the
+  # play immediately instead of after the handler round. Belt and suspenders
+  # is not paranoia when the belt is free.
+  ansible.builtin.command:
+    cmd: "{{ bad_bin_dir }}/bad check-config --config {{ bad_config_dir }}/config.toml"
+  changed_when: false

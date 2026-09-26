@@ -1,0 +1,121 @@
+# Release pipeline.
+#
+# 1. python-semantic-release reads conventional commits, bumps the version in
+#    pyproject.toml and __init__.py, regenerates CHANGELOG.md, tags and
+#    creates the GitHub release.
+# 2. A three OS matrix builds standalone executables with PyInstaller:
+#    Linux binary, Windows exe, macOS dmg. They get attached to the release,
+#    because a tool nobody can run is a hobby.
+#
+# Nothing happens unless a commit deserves it: feat -> minor, fix -> patch,
+# BREAKING CHANGE -> major. Chores get ignored, which is the nicest thing
+# anyone has ever said about chores.
+#
+# And nothing happens unless CI is green either: this workflow runs AFTER the
+# CI workflow completes successfully. Releasing while the tests are red is how
+# "we ship fast" becomes "we shipped it broken, at scale, with a changelog".
+name: Release
+
+# Gated on CI, not on the raw push: this fires when the CI workflow completes
+# on main, and only proceeds if it succeeded. Red tests, no release.
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # Belt on the workflow_run gate: never cut a release from a red run.
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      # The GITHUB_TOKEN is read-only by default, and a read-only token
+      # cannot push the bump commit, the tag or the release. Ask for write
+      # or the 403 asking for a word with you.
+      contents: write
+    outputs:
+      released: ${{ steps.semantic.outputs.released }}
+      version: ${{ steps.semantic.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # semantic-release needs the full history to judge your commits.
+          persist-credentials: false
+
+      - uses: python-semantic-release/python-semantic-release@v9.21.0
+        id: semantic
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          # Push the version bump, changelog and tag back to main itself.
+          push: true
+
+  build:
+    needs: release
+    if: needs.release.outputs.released == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: bad-linux
+          - os: windows-latest
+            asset: bad-windows.exe
+          - os: macos-latest
+            asset: bad-macos.dmg
+    runs-on: ${{ matrix.os }}
+    permissions:
+      # Attaching binaries to the GitHub release also needs write, not just
+      # the version bump job. Same token, same default, same 403 otherwise.
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package with build extras
+        run: pip install -e ".[build]"
+
+      - name: Build executable (PyInstaller)
+        run: >-
+          pyinstaller --onefile --name bad
+          --collect-all sklearn --collect-all scipy
+          --paths src src/behavior_anomaly/__main__.py
+
+      - name: Package macOS dmg
+        if: matrix.os == 'macos-latest'
+        run: |
+          mkdir -p package
+          cp dist/bad package/
+          hdiutil create -volname BAD -srcfolder package -format UDZO -ov bad-macos.dmg
+
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          if [ "${{ matrix.os }}" = "macos-latest" ]; then
+            cp bad-macos.dmg artifacts/
+          elif [ "${{ matrix.os }}" = "windows-latest" ]; then
+            cp dist/bad.exe artifacts/bad-windows.exe
+          else
+            cp dist/bad artifacts/bad-linux
+          fi
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: artifacts/*
+
+      - name: Attach binaries to the GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.release.outputs.version }}
+          files: artifacts/*

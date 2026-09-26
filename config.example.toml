@@ -1,0 +1,47 @@
+# BAD: Behavior Anomaly Detection. Admin configuration.
+#
+# Copy to somewhere sensible, edit, and point BAD at it:
+#     bad train --config /etc/bad/config.toml ...
+#
+# Precedence: built-in defaults < this file < command line flags.
+# Every key is optional. A missing key falls back to its default, so the
+# file can be one line or the whole thing. An invalid value is an error,
+# because silent misconfiguration is how audits get interesting.
+
+[detection]
+# Size of each behavior window, in seconds (epoch-aligned buckets).
+window_seconds = 300
+# Minimum anomaly score (0..1) for a window to become an alert.
+anomaly_threshold = 0.65
+# Expected fraction of anomalies in training data. Leave it alone unless
+# you enjoy tuning knobs you cannot see.
+contamination = 0.01
+# Smallest window worth training on and scoring. Two events is a
+# coincidence, not a behavior pattern.
+min_events = 5
+
+[siem]
+# Where alerts go. "syslog" (structured JSON through the local syslog,
+# works everywhere) or "webhook" (HTTP POST, needs an endpoint).
+kind = "syslog"
+# webhook only: the URL that receives alert POSTs.
+# endpoint = "https://siem.example.com/api/ingest"
+# webhook only: bearer token for the endpoint.
+# api_key = "change-me"
+
+[input_dynamics]
+# Include typing and mouse motion features in the anomaly model. These are
+# strong signals for hijacked sessions and insider behavior. If you have
+# older models trained without them, keep this off until you retrain,
+# because the feature vector length must match.
+enabled = true
+# Suggestion passed along to input samplers (agents feeding the jsonl
+# front door) for how often, in seconds, to emit an aggregate event.
+# BAD consumes input events, it never records them itself.
+sampler_interval_seconds = 30
+
+# PRIVACY, in writing: input dynamics are timing and motion ONLY.
+# Aggregate counts, intervals, distances and direction changes.
+# BAD never reads, stores, or transmits keystroke content. There is no
+# option here that enables it, on any platform, ever. An admin who wants
+# keystroke content must look elsewhere, ideally at their own reflection.

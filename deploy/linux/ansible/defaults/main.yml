@@ -1,0 +1,36 @@
+# Defaults for the BAD ansible role. Override any of these in your inventory
+# or playbook. Pin bad_version for a fleet: reproducibility beats novelty.
+
+# Release to install. "latest" resolves to the newest tag; a pin like "0.2.0"
+# downloads that exact artifact.
+bad_version: "latest"
+
+# Where the binary and config live.
+bad_bin_dir: "/usr/local/bin"
+bad_config_dir: "/etc/bad"
+bad_data_dir: "/var/lib/bad"
+
+# GitHub repo the release artifacts live in.
+bad_repo_url: "https://github.com/well-it-wasnt-me/BAD"
+
+# The account that will run `bad collect`. Gets systemd-journal membership
+# (never root) and ownership of the data directory. Create it yourself or
+# through the user module elsewhere in your playbooks; this role only
+# manages its group memberships.
+bad_service_user: "badsvc"
+
+# Toggles mirrored from the config template. These are the ones fleets
+# actually change; the rest of the config keeps the documented defaults.
+bad_input_dynamics_enabled: true
+bad_window_seconds: 300
+bad_anomaly_threshold: 0.65
+bad_min_events: 5
+bad_siem_kind: "syslog"
+bad_siem_endpoint: null
+bad_siem_api_key: null
+bad_collector_since: "1 day ago"
+
+# auditd gives the good telemetry (process exec, shell commands). Enabling it
+# system-wide is a one-line fact of life on a monitored fleet. Set to false
+# if your baseline already mandates auditd policy and you own it elsewhere.
+bad_ensure_auditd: true
