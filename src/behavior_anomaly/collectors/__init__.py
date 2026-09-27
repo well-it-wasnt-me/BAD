@@ -12,7 +12,8 @@ def build_collector(kind: str, source: str | None = None) -> Collector:
 
     kind: "jsonl" (agent-friendly, works anywhere), "linux" (journalctl),
         "windows" (event log), "macos" (unified log)
-    source: path for jsonl, --since value for linux. Optional elsewhere.
+    source: path for jsonl (--source), journalctl time string for linux
+        (--since). Optional elsewhere.
     """
     if kind == "jsonl":
         if source is None:

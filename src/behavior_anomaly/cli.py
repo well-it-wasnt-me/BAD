@@ -50,7 +50,12 @@ def load_config(config: Path | None) -> AppConfig:
 def collect(
     platform: str = typer.Option(..., help="Collector: linux, windows, macos or jsonl"),
     output: Path = typer.Option(..., help="JSONL file to append collected events to"),
-    source: str | None = typer.Option(None, help="JSONL path for jsonl, --since value for linux"),
+    # One parameter, two names: --source for the jsonl collector (a file
+    # path) and --since for the linux collector (a journalctl time string).
+    # The docs promised --since, so the option now keeps that promise.
+    source: str | None = typer.Option(
+        None, "--source", "--since", help="JSONL path for jsonl, --since value for linux"
+    ),
 ) -> None:
     """Collect events from the local OS or a normalized JSONL file."""
     collector = build_collector(platform, source)
@@ -172,8 +177,7 @@ def check_config(
         f"min_events={detection.min_events}"
     )
     typer.echo(
-        f"  siem: kind={siem.kind} endpoint_set={siem.endpoint is not None} "
-        f"api_key_set={siem.api_key is not None}"
+        f"  siem: kind={siem.kind} endpoint_set={siem.endpoint is not None} api_key_set={siem.api_key is not None}"
     )
     typer.echo(
         f"  input_dynamics: enabled={input_dynamics.enabled} "

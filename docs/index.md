@@ -20,8 +20,9 @@ in between is your call.
 - **Normalizes** everything into one schema, `BehaviorEvent`, so the rest of
   the pipeline never has to care what an operating system sounds like
 - **Extracts features** per user, per host, per time window, including
-  optional typing and mouse dynamics: aggregates only, never content,
-  because the timing of typing is a signature and the content is a lawsuit
+  optional **typing cadence and mouse movement** behavioral biometrics:
+  aggregates only, never content, because the timing of typing is a
+  signature and the content is a lawsuit
 - **Trains** an unsupervised model (Isolation Forest baseline) on what normal
   looks like, because nobody has time to label "Tuesday" ten thousand times
 - **Detects** anomalies and emits typed, vendor-neutral `Alert` objects
@@ -39,6 +40,26 @@ in between is your call.
   interchangeable by interface.
 - It does not guess. Collectors skip telemetry they cannot identify. Silence
   beats fiction.
+
+## The signal nobody else listens for
+
+Process and auth telemetry tells you *what* a user did. Typing cadence and
+mouse motion tell you *who* was at the keyboard. A hijacked session almost
+always types and mouses differently from the legitimate owner, no matter how
+careful the attacker is about which commands they run. Pure process telemetry
+is deaf to that signal; BAD is not.
+
+BAD derives behavioral biometrics from **typing cadence** (keystroke counts,
+mean and stddev of inter-key intervals, typing velocity) and **mouse movement
+patterns** (distance, speed, direction changes). These are aggregates only,
+reported by an agent over the JSONL front door. BAD never records keystrokes,
+never reads content, and there is no option to turn that on, on any platform,
+ever. The timing of typing is a signature. The content of typing is a lawsuit.
+
+This is the part that makes BAD more than a process-log counter with a
+threshold: the model can flag a session where the commands look normal but
+the human behind them does not. That is the difference between "something
+happened" and "someone else happened".
 
 ## Pipeline
 

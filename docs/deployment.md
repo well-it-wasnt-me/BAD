@@ -101,6 +101,7 @@ courtesy to you.
 | Windows, Intune | `deploy/windows/intune/` | The same steps as `install.cmd`/`uninstall.cmd` for Win32 app packaging, with the exact build command |
 | Linux, Ansible | `deploy/linux/ansible/` | A small role: group membership, config template, binary install, config validation handler |
 | Linux, no fleet tool | `deploy/linux/install.sh` | The same steps as a plain shell script, for shops where Ansible is a rumor |
+| Linux, interactive | `deploy/linux/install-interactive.sh` | Checks prerequisites, asks permission at each step, installs auditd and the binary, optionally sets up a systemd timer. For the human at the keyboard |
 | macOS, MDM | `deploy/macos/` | `install.sh` from the dmg, plus the pkg build recipe that Jamf, Intune and Addigy can all push |
 
 ## 5. Running on a schedule

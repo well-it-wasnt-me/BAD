@@ -246,3 +246,60 @@ def test_cli_check_config_accepts_shipped_example():
 
     result = runner.invoke(app, ["check-config", "--config", str(REPO_ROOT / "config.example.toml")])
     assert result.exit_code == 0
+
+
+# ---------------------------------------------------------------- collect --since
+
+
+def test_cli_collect_since_alias_reaches_linux_collector(tmp_path, monkeypatch):
+    # The docs promised `bad collect --platform linux --since "1 hour ago"`.
+    # For a long time the option was named --source only, so every admin who
+    # copied the docs got told there is no such option. This test makes sure
+    # the promise is kept: --since is accepted and its value lands in the
+    # linux collector as the `since` argument, not lost in a click error.
+    captured: dict = {}
+
+    def fake_build_collector(kind: str, source: str | None = None):
+        captured["kind"] = kind
+        captured["source"] = source
+
+        class _NoOpCollector:
+            def collect(self):
+                return iter([])
+
+        return _NoOpCollector()
+
+    monkeypatch.setattr("behavior_anomaly.cli.build_collector", fake_build_collector)
+
+    output = tmp_path / "collected.jsonl"
+    result = runner.invoke(
+        app,
+        ["collect", "--platform", "linux", "--output", str(output), "--since", "1 hour ago"],
+    )
+    assert result.exit_code == 0
+    assert captured["kind"] == "linux"
+    assert captured["source"] == "1 hour ago"
+
+
+def test_cli_collect_source_still_works_for_jsonl(tmp_path, benign_events):
+    # Backwards compatibility: --source must keep working for the jsonl
+    # collector. Adding --since as an alias must not break the original name.
+    source = tmp_path / "events.jsonl"
+    write_events(source, benign_events)
+    output = tmp_path / "collected.jsonl"
+
+    result = runner.invoke(
+        app,
+        ["collect", "--platform", "jsonl", "--source", str(source), "--output", str(output)],
+    )
+    assert result.exit_code == 0
+    assert "Collected 60 event(s)" in result.output
+
+
+def test_cli_collect_help_lists_both_source_and_since():
+    # The help output is the first place an admin looks when an option
+    # "does not exist". Both names should be visible there.
+    result = runner.invoke(app, ["collect", "--help"])
+    assert result.exit_code == 0
+    assert "--source" in result.output
+    assert "--since" in result.output
