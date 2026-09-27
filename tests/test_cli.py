@@ -1,6 +1,7 @@
 """End to end tests for the CLI. If the CLI lies, everything above it lies too."""
 
 import json
+import re
 
 from typer.testing import CliRunner
 
@@ -9,6 +10,18 @@ from behavior_anomaly.schema import BehaviorEvent
 from behavior_anomaly.storage.jsonl import JsonlStore
 
 runner = CliRunner()
+
+# Rich renders --help with ANSI escape codes in some environments (CI with
+# FORCE_COLOR, certain typer/click versions). Those codes can split an option
+# name mid-word, so substring checks on raw help output are unreliable.
+# Strip them before asserting. A test that depends on terminal styling is a
+# test that fails only on someone else's machine, which is the worst kind.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def strip_ansi(text: str) -> str:
+    """Remove ANSI escape codes so help-text assertions are styling-agnostic."""
+    return _ANSI_RE.sub("", text)
 
 
 def write_events(path: str, events: list[BehaviorEvent]) -> None:
@@ -298,8 +311,11 @@ def test_cli_collect_source_still_works_for_jsonl(tmp_path, benign_events):
 
 def test_cli_collect_help_lists_both_source_and_since():
     # The help output is the first place an admin looks when an option
-    # "does not exist". Both names should be visible there.
+    # "does not exist". Both names should be visible there. Strip ANSI
+    # escape codes first, because Rich can split an option name mid-word
+    # with styling codes and break a naive substring check.
     result = runner.invoke(app, ["collect", "--help"])
     assert result.exit_code == 0
-    assert "--source" in result.output
-    assert "--since" in result.output
+    help_text = strip_ansi(result.output)
+    assert "--source" in help_text
+    assert "--since" in help_text

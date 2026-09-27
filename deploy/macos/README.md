@@ -1,14 +1,56 @@
-# BAD for macOS: pkg and MDM
+# BAD for macOS: pkg, MDM and interactive install
 
 For a fleet, a **pkg** is the real answer. Jamf, Microsoft Intune and
 Addigy-style MDMs all push a plain macOS installer package, and the same pkg
 works for all of them. `install.sh` here is the manual equivalent for one
-machine, and it is also the reference for what the pkg must do: copy a binary,
-drop a config, verify, leave.
+machine, and `install-interactive.sh` is the guided version for the human at
+the keyboard who wants to be asked before anything changes.
 
-Honesty first: this recipe and `install.sh` are written to spec and reviewed,
+Honesty first: these recipes and scripts are written to spec and reviewed,
 but have not been run on a real Mac fleet by this project. Mount the dmg on
 one sacrificial machine before you trust the recipe with a thousand.
+
+## Interactive installer
+
+```bash
+sudo ./install-interactive.sh
+# or, if the dmg is not next to the script:
+sudo DMG=/path/to/bad-macos.dmg ./install-interactive.sh
+```
+
+What it does, in order, each step gated by a yes/no prompt:
+
+1. **Preflight**: confirms macOS, root, and that the dmg exists
+2. **Architecture check**: verifies the binary's CPU arch (arm64 / x86_64 /
+   universal2) matches the machine. Offers to install Rosetta 2 if an x86_64
+   binary landed on Apple Silicon. Aborts if an arm64 binary landed on Intel,
+   because Rosetta does not translate in that direction.
+3. **Service user**: offers to create a hidden system account and add it to
+   the admin group (required for full unified log access, which is Apple's
+   privilege table, not ours)
+4. **Binary**: mounts the dmg, copies the binary, offers to strip the
+   `com.apple.quarantine` attribute (Gatekeeper), smoke tests `bad --help`
+5. **Config**: drops the example config (from the dmg or downloaded, never
+   overwrites an existing one), validates with `bad check-config`, offers to
+   open the editor
+6. **Data directory**: creates the output directory, owned by the service user
+7. **launchd (optional)**: offers to install a launchd `StartCalendarInterval`
+   job for nightly collection. Fully reversible; the summary prints the exact
+   removal command
+
+What it does NOT do: install a daemon, a login hook, or an input monitor,
+unless you explicitly say yes to the optional launchd job. BAD runs when
+something runs it. The schedule is your call.
+
+## Non-interactive installer
+
+```bash
+sudo ./install.sh                       # expects bad-macos.dmg next to it
+sudo DMG=/path/to/bad-macos.dmg ./install.sh
+```
+
+For fleets and scripts: no questions, same steps every time, dies on the
+first surprise.
 
 ## The pkg recipe
 
@@ -50,19 +92,3 @@ Notes worth reading once:
 - **Admin group.** The macOS unified log only opens up for admin-group users.
   The account running `bad collect` should be in it. That is Apple's
   privilege table, not ours.
-
-## Manual install from the dmg
-
-```bash
-hdiutil attach bad-macos.dmg
-sudo installer -pkg /Volumes/BAD/BAD.pkg -target /    # if the dmg carries a pkg
-# or, for a dmg with a plain binary:
-sudo ./install.sh                                    # same steps, no MDM
-```
-
-Either way, verify before you believe it:
-
-```bash
-bad --help
-bad check-config --config /etc/bad/config.toml
-```

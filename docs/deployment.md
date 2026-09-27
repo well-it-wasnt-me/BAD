@@ -33,6 +33,28 @@ Notes that save an afternoon:
 - On macOS, non-admin users get redacted unified log output. The admin
   group gets the full firehose. Pick your tradeoff and write it down.
 
+Runtime dependencies worth knowing:
+
+- **Windows**: the PyInstaller binary bundles Python, numpy and scikit-learn,
+  but numpy and scikit-learn are compiled with MSVC and depend on the
+  Visual C++ Redistributable x64 runtime. A clean Windows box without it will
+  see bad.exe fail to start and nothing else. The interactive installer
+  (`Install-BAD-Interactive.ps1`) checks for it and offers to install it. For
+  fleet pushes, install it once via your config management or Intune:
+  download `vc_redist.x64.exe` from
+  `https://aka.ms/vs/17/release/vc_redist.x64.exe` and run it with
+  `/install /quiet /norestart`.
+- **macOS**: the release binary is built on the CI runner's native
+  architecture. If the binary is arm64 and the target Mac is Intel, it will
+  not run (Rosetta does not translate in that direction). If the binary is
+  x86_64 and the target Mac is Apple Silicon, it runs via Rosetta 2, which
+  must be installed first (`softwareupdate --install-rosetta
+  --agree-to-license`). The interactive installer (`install-interactive.sh`)
+  checks this and offers to install Rosetta. Downloaded binaries also carry a
+  `com.apple.quarantine` attribute (Gatekeeper); the interactive installer
+  offers to strip it, or the admin allows BAD in System Settings > Privacy &
+  Security. Universal2 builds (arm64 + x86_64) avoid both issues.
+
 And to state the part worth repeating on a fleet page: BAD never hooks the
 keyboard or mouse, never captures keystroke content, and no configuration
 option enables that on any platform, ever. Input dynamics arrive as timing
@@ -98,11 +120,13 @@ courtesy to you.
 | Ecosystem | Template | What it does |
 |---|---|---|
 | Windows, manual | `deploy/windows/Install-BAD.ps1` | Downloads the release exe, installs to Program Files, drops the config, adds the service account to Event Log Readers |
+| Windows, interactive | `deploy/windows/Install-BAD-Interactive.ps1` | Checks for VC++ Redistributable, asks permission at each step, installs the binary and config, optionally sets up a Task Scheduler job. For the human at the keyboard |
 | Windows, Intune | `deploy/windows/intune/` | The same steps as `install.cmd`/`uninstall.cmd` for Win32 app packaging, with the exact build command |
 | Linux, Ansible | `deploy/linux/ansible/` | A small role: group membership, config template, binary install, config validation handler |
 | Linux, no fleet tool | `deploy/linux/install.sh` | The same steps as a plain shell script, for shops where Ansible is a rumor |
 | Linux, interactive | `deploy/linux/install-interactive.sh` | Checks prerequisites, asks permission at each step, installs auditd and the binary, optionally sets up a systemd timer. For the human at the keyboard |
 | macOS, MDM | `deploy/macos/` | `install.sh` from the dmg, plus the pkg build recipe that Jamf, Intune and Addigy can all push |
+| macOS, interactive | `deploy/macos/install-interactive.sh` | Checks architecture (arm64/x86_64, offers Rosetta 2), strips Gatekeeper quarantine, asks permission at each step, optionally sets up a launchd job. For the human at the keyboard |
 
 ## 5. Running on a schedule
 
