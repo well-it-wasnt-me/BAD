@@ -11,6 +11,8 @@ admin set in the file survives unless the human on the keyboard says otherwise.
 """
 
 import json
+import logging
+import threading
 from pathlib import Path
 
 import typer
@@ -18,6 +20,7 @@ import typer
 from behavior_anomaly import pipeline
 from behavior_anomaly.collectors import build_collector
 from behavior_anomaly.config import AppConfig
+from behavior_anomaly.daemon import install_signal_handlers, run_loop
 from behavior_anomaly.models.persistence import load_model, save_model
 from behavior_anomaly.siem import build_sink
 from behavior_anomaly.siem.ecs import to_ecs
@@ -153,6 +156,58 @@ def monitor(
     typer.echo(f"Sent {len(alerts)} alert(s) to the {siem_config.kind} sink")
 
 
+@app.command()
+def daemon(
+    config_path: Path | None = typer.Option(None, "--config", help=CONFIG_HELP),
+    once: bool = typer.Option(
+        False,
+        "--once",
+        help="Run a single cycle and exit. For cron, testing, or the impatient.",
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Log at DEBUG instead of INFO."),
+) -> None:
+    """Run the continuous monitoring daemon.
+
+    Collects fresh telemetry, scores it against a trained model, ships alerts
+    to the SIEM, and retrains periodically. All three stages are enabled by
+    default and configurable via the [daemon] section of the TOML config.
+
+    Use --once to run a single cycle (useful for cron or smoke tests). Without
+    --once the daemon loops forever until Ctrl-C or SIGTERM, which is the
+    whole point of a daemon. If you wanted one-shot, the other commands are
+    right there.
+    """
+    app_config = load_config(config_path)
+    daemon_config = app_config.daemon
+
+    if not daemon_config.enabled:
+        typer.echo("Daemon is disabled in config. Set [daemon] enabled = true to start it.")
+        raise typer.Exit(code=1)
+
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+
+    if once:
+        # One cycle, no loop, no signal handling. The training-wheels mode.
+        from behavior_anomaly.daemon import DaemonState, run_cycle
+
+        result = run_cycle(app_config, DaemonState())
+        typer.echo(
+            f"cycle={result.cycle} collected={result.collected} "
+            f"trained={result.trained} scored={result.scored} "
+            f"alerts={result.alerts}"
+        )
+        if result.skipped:
+            typer.echo(f"skipped: {', '.join(result.skipped)}")
+        return
+
+    stop_event = threading.Event()
+    install_signal_handlers(stop_event)
+    run_loop(app_config, stop_event=stop_event)
+
+
 @app.command("check-config")
 def check_config(
     config_path: Path = typer.Option(..., "--config", help="Admin TOML config file to validate"),
@@ -168,6 +223,7 @@ def check_config(
     detection = app_config.detection
     siem = app_config.siem
     input_dynamics = app_config.input_dynamics
+    daemon = app_config.daemon
 
     typer.echo(f"config OK: {config_path}")
     typer.echo(
@@ -182,6 +238,13 @@ def check_config(
     typer.echo(
         f"  input_dynamics: enabled={input_dynamics.enabled} "
         f"sampler_interval={input_dynamics.sampler_interval_seconds}s"
+    )
+    typer.echo(
+        f"  daemon: enabled={daemon.enabled} "
+        f"interval={daemon.interval_seconds}s "
+        f"collect={daemon.collect.enabled} "
+        f"train={daemon.train.enabled} "
+        f"monitor={daemon.monitor.enabled}"
     )
 
 

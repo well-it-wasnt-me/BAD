@@ -71,6 +71,21 @@ bad monitor --input events.jsonl --model model.joblib \
 Every alert that clears the threshold goes to the sink. The command prints
 exactly how many were sent, because "trust" is a bug.
 
+
+## 5. Daemon (continuous monitoring)
+
+The commands above are one-shot. The daemon loops them on a timer:
+
+```bash
+bad daemon --config /etc/bad/config.toml
+bad daemon --once              # single cycle, for cron or smoke tests
+```
+
+Every cycle: collect fresh telemetry, score it, ship alerts to the SIEM,
+retrain periodically. All three stages are enabled by default and
+configurable via the `[daemon]` section of the config file. See
+[Continuous Monitoring Daemon](daemon.md) for the full story.
+
 ## The config file
 
 Every command accepts `--config /path/to/config.toml`, and the repo ships a
@@ -89,6 +104,24 @@ kind = "syslog"          # or "webhook", with an endpoint
 [input_dynamics]
 enabled = true
 sampler_interval_seconds = 30
+
+[daemon]
+enabled = true                    # master switch
+interval_seconds = 300            # sleep between cycles
+events_file = "/var/lib/bad/events.jsonl"
+model_file = "/var/lib/bad/model.joblib"
+
+[daemon.collect]
+enabled = true                    # pull fresh telemetry each cycle
+# platform = "linux"             # omit to auto-detect
+since = "5 minutes ago"
+
+[daemon.train]
+enabled = true                    # retrain periodically
+every_cycles = 12                 # every 12 cycles (1h at 300s)
+
+[daemon.monitor]
+enabled = true                    # score and ship alerts each cycle
 ```
 
 The precedence is boring and predictable: built-in defaults lose to the
@@ -115,7 +148,7 @@ bad check-config --config /etc/bad/config.toml
 ```
 
 It validates the file and prints the effective settings: windows, threshold,
-sink, input dynamics. The same command the deployment templates run, so what
+sink, input dynamics, and daemon configuration. The same command the deployment templates run, so what
 your deploy log said is what your fleet will do. Fleet-wide rollout lives in
 [Deployment](deployment.md).
 

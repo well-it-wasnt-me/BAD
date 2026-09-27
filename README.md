@@ -48,9 +48,11 @@ so each layer can evolve independently, and so a bug in one layer cannot moonlig
 - **Vendor-neutral findings.** No Splunk-isms, no Sentinel-isms. Alerts are a
   typed JSON shape any SIEM, XDR or agent can consume. An ECS mapping ships
   with the package for the Elastic-inclined.
-- **Tool, not agent.** It has no daemon, no persistence of its own beyond
-  files you point it at, and no opinion about where it runs. Feed it events,
-  get verdicts.
+- **Tool, not agent (but it can loop).** The CLI commands are one-shot verbs
+  you wire into your own scheduler. The optional daemon command loops
+  collect, train and monitor on a timer, all enabled by default and
+  configurable via the [daemon] section of the TOML config. Feed it events,
+  get verdicts, on your schedule or its own.
 - **Conservative collectors.** Entries we cannot identify get skipped, not
   guessed. A tool that hallucinates telemetry is worse than no tool.
 - **Privacy by construction.** Input dynamics (typing cadence, mouse motion)
@@ -97,6 +99,10 @@ bad collect --platform jsonl --source agent-events.jsonl --output events.jsonl
 bad train --input events.jsonl --output model.joblib
 bad score --input events.jsonl --model model.joblib
 bad monitor --input events.jsonl --model model.joblib --siem webhook --endpoint https://siem.example.test/hook
+
+# Or run the continuous monitoring daemon (collects, scores, retrains, loops):
+bad daemon --config /etc/bad/config.toml
+bad daemon --once    # single cycle, for cron or smoke tests
 ```
 
 ## Documentation
@@ -111,8 +117,9 @@ mkdocs serve    # live preview at http://localhost:8000
 Deploying to a fleet? [Deployment](docs/deployment.md) covers prerequisites per platform, and the `deploy/` directory ships the templates: 
 a PowerShell installer plus Intune packaging for Windows, an ansible role and a plain `install.sh` for Linux, 
 and a pkg recipe plus `install.sh` for macOS MDMs. 
-BAD installs no service and schedules nothing; your platform's scheduler runs it on the cadence you chose, 
-which is the "tool, not agent" contract with the boring parts already written for you.
+BAD can run as a daemon (`bad daemon`) or as one-shot commands wired into your own scheduler;
+your platform's scheduler runs it on the cadence you chose, which is the "tool, not agent" contract
+with the boring parts already written for you. The daemon ships with systemd and cron examples.
 
 ## Releases
 

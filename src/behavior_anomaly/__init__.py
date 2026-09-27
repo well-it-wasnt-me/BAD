@@ -9,7 +9,8 @@ The import package stays behavior_anomaly so nobody has to type
 
 __version__ = "0.0.0"
 
-from behavior_anomaly.config import DetectionConfig, SiemConfig
+from behavior_anomaly.config import DaemonConfig, DetectionConfig, SiemConfig
+from behavior_anomaly.daemon import CycleResult, DaemonState, run_cycle, run_loop
 from behavior_anomaly.detection.engine import DetectionEngine
 from behavior_anomaly.detection.windowing import build_windows
 from behavior_anomaly.features.behavioral import BehavioralFeatures
@@ -22,6 +23,9 @@ __all__ = [
     "Alert",
     "BehaviorEvent",
     "BehavioralFeatures",
+    "CycleResult",
+    "DaemonConfig",
+    "DaemonState",
     "DetectionConfig",
     "DetectionEngine",
     "EventType",
@@ -32,6 +36,8 @@ __all__ = [
     "build_windows",
     "detect",
     "monitor",
+    "run_cycle",
+    "run_loop",
     "to_ecs",
     "train_model",
     "__version__",

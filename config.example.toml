@@ -45,3 +45,55 @@ sampler_interval_seconds = 30
 # BAD never reads, stores, or transmits keystroke content. There is no
 # option here that enables it, on any platform, ever. An admin who wants
 # keystroke content must look elsewhere, ideally at their own reflection.
+
+# --------------------------------------------------------------- daemon ---
+# The continuous monitoring loop. Collect fresh telemetry, score it, ship
+# alerts to the SIEM, retrain periodically, repeat. This is the always-on
+# half of BAD. The CLI commands (collect, train, score, monitor) are
+# one-shot; the daemon is the thing that runs while you sleep.
+#
+# All three stages are enabled by default. Turn them off individually if
+# you want to use the daemon as just a collector, or just a scorer with an
+# external collector feeding events into events_file.
+
+[daemon]
+# Master switch. False and the `bad daemon` command refuses to start.
+# One boolean to kill the whole feature.
+enabled = true
+# How long the daemon sleeps between cycles, in seconds. 300 (five
+# minutes) matches the default window size. Faster burns CPU for little
+# gain; slower gives an attacker more runway.
+interval_seconds = 300
+# Where collected events accumulate. Append-only, greppable, survives
+# restarts. The daemon reads new events from here each cycle.
+events_file = "/var/lib/bad/events.jsonl"
+# Where the trained model lives. The daemon loads it for scoring and
+# overwrites it when retraining. On the first cycle with no model, the
+# daemon trains one before it starts scoring.
+model_file = "/var/lib/bad/model.joblib"
+
+[daemon.collect]
+# Pull fresh OS telemetry every cycle and append to events_file.
+# Off means the daemon only scores events an external agent already wrote.
+enabled = true
+# Collector to use. Omit to auto-detect from the running OS.
+# Explicit options: "linux", "windows", "macos", "jsonl".
+# platform = "linux"
+# Time window for the collector. For linux this becomes `journalctl --since`.
+# Defaults to one interval back so we overlap and never miss the boundary.
+since = "5 minutes ago"
+
+[daemon.train]
+# Retrain the model from accumulated events so it drifts with the user
+# instead of fossilizing on day one.
+enabled = true
+# Retrain every N daemon cycles. With interval=300 and every_cycles=12,
+# that is once an hour. Set to 1 for paranoid retraining (slow), or 288
+# for once a day (comfy).
+every_cycles = 12
+
+[daemon.monitor]
+# Score new events and ship every alert to the SIEM sink every cycle.
+# This is the whole point. If you turn this off you have built a very
+# expensive event collector.
+enabled = true

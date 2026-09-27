@@ -319,3 +319,104 @@ def test_cli_collect_help_lists_both_source_and_since():
     help_text = strip_ansi(result.output)
     assert "--source" in help_text
     assert "--since" in help_text
+
+
+# --------------------------------------------------------------- daemon CLI
+
+
+def test_cli_daemon_disabled_refuses_to_start(tmp_path):
+    # A disabled daemon should exit with code 1, not loop forever.
+    config = tmp_path / "config.toml"
+    config.write_text("[daemon]\nenabled = false\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["daemon", "--config", str(config)])
+    assert result.exit_code == 1
+    assert "disabled" in result.output.lower()
+
+
+def test_cli_daemon_once_collects_and_trains(tmp_path, benign_events, monkeypatch):
+    # --once runs a single cycle and exits. Perfect for cron and for tests
+    # that do not want to wait for the heat death of the universe.
+    config = tmp_path / "config.toml"
+    config.write_text(
+        f"""
+[daemon]
+enabled = true
+interval_seconds = 1
+events_file = "{tmp_path / "events.jsonl"}"
+model_file = "{tmp_path / "model.joblib"}"
+
+[daemon.collect]
+enabled = true
+platform = "jsonl"
+""",
+        encoding="utf-8",
+    )
+
+    # Patch build_collector so we do not actually shell out to journalctl.
+    fake_events = list(benign_events)
+
+    class FakeCollector:
+        def collect(self):
+            return iter(fake_events)
+
+    monkeypatch.setattr("behavior_anomaly.daemon.build_collector", lambda *a, **kw: FakeCollector())
+
+    result = runner.invoke(app, ["daemon", "--config", str(config), "--once"])
+    assert result.exit_code == 0
+    assert "collected=60" in result.output
+    assert "trained=True" in result.output
+    assert (tmp_path / "model.joblib").exists()
+
+
+def test_cli_daemon_once_with_disabled_collect(tmp_path, monkeypatch):
+    # collect disabled: the cycle still runs, just gathers nothing.
+    config = tmp_path / "config.toml"
+    config.write_text(
+        f"""
+[daemon]
+enabled = true
+interval_seconds = 1
+events_file = "{tmp_path / "events.jsonl"}"
+model_file = "{tmp_path / "model.joblib"}"
+
+[daemon.collect]
+enabled = false
+
+[daemon.monitor]
+enabled = false
+""",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["daemon", "--config", str(config), "--once"])
+    assert result.exit_code == 0
+    assert "collected=0" in result.output
+    assert "collect disabled" in result.output
+
+
+def test_cli_check_config_prints_daemon_settings(tmp_path):
+    # check-config must now report the daemon section, or the admin cannot
+    # verify their daemon config before deploying it.
+    config = tmp_path / "config.toml"
+    config.write_text(
+        '[daemon]\nenabled = true\ninterval_seconds = 60\n[daemon.train]\nevery_cycles = 6\n',
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["check-config", "--config", str(config)])
+    assert result.exit_code == 0
+    assert "daemon:" in result.output
+    assert "interval=60s" in result.output
+    assert "collect=True" in result.output
+    assert "train=True" in result.output
+    assert "monitor=True" in result.output
+
+
+def test_cli_check_config_example_includes_daemon():
+    # The shipped example config must validate and show daemon defaults.
+    from tests.conftest import REPO_ROOT
+
+    result = runner.invoke(app, ["check-config", "--config", str(REPO_ROOT / "config.example.toml")])
+    assert result.exit_code == 0
+    assert "daemon:" in result.output

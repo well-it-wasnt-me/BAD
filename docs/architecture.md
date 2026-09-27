@@ -53,6 +53,13 @@ needs to.
                         |
                         v
 +-----------------------------------------------------------+
+|  daemon.py  run_cycle / run_loop                           |
+|  The always-on loop: collect, train, monitor, repeat.     |
+|  Uses pipeline + collectors + siem on a timer.             |
++-----------------------------------------------------------+
+                        |
+                        v
++-----------------------------------------------------------+
 |  siem/  base.py, webhook.py, syslog.py, ecs.py             |
 |  Contract: SiemSink.send(alert)                            |
 +-----------------------------------------------------------+
@@ -84,6 +91,12 @@ today, syslog today, Kafka or CEF tomorrow; the pipeline does not care.
 **Alerts are vendor-neutral.** One typed JSON shape with score, severity,
 evidence and the feature vector. Map it to ECS, map it to whatever your SIEM
 ate for breakfast. The ECS mapper in `siem/ecs.py` is included, not required.
+
+**The daemon is a loop, not a framework.** One thread, one cycle at a time,
+no asyncio, no message queue. Each cycle runs collect -> train -> monitor,
+then sleeps. Cycle logic is split from loop logic so tests exercise one
+iteration without waiting for the heat death of the universe. A daemon that
+needs a load balancer to function has lost the plot.
 
 ## Why unsupervised
 

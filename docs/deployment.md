@@ -1,10 +1,19 @@
 # Fleet deployment for IT and sysadmins
 
-BAD ships no daemon, no service, no watchdog and no input hooks. It runs when
-something runs it, and then it stops. That is the "tool, not agent" contract:
-the binary does math and leaves. If you want that math to happen every night,
-you own the schedule, and that is exactly how it should be. Convenience that
-requires a resident process is how tools turn into liability.
+BAD can run two ways: one-shot commands wired into your own scheduler, or the
+built-in continuous monitoring daemon (`bad daemon`). Both are the "tool, not
+agent" contract: BAD does math and leaves. The daemon is a simple loop
+(collect, train, monitor, sleep, repeat) with no hooks, no watchdog, no
+resident input capture. If you want that math to happen every night, you own
+the schedule; if you want it continuously, the daemon does it without
+requiring you to wire one up. Convenience that requires a complicated
+resident process is how tools turn into liability, so the daemon is one
+thread and one loop, nothing more.
+
+What follows is the whole ceremony: prerequisites, install, verify on one
+pilot machine, then push to the fleet with the templates in `deploy/`.
+Daemon deployment specifics are in
+[Continuous Monitoring Daemon](daemon.md).
 
 What follows is the whole ceremony: prerequisites, install, verify on one
 pilot machine, then push to the fleet with the templates in `deploy/`.
@@ -168,6 +177,37 @@ the same, or push the schedule from your MDM like any other policy.
 The pattern everywhere is identical: a scheduler you already trust runs an
 unprivileged binary on a cadence you already chose. BAD brings the math,
 your platform brings the calendar.
+
+### Option B: the built-in daemon
+
+If you prefer continuous monitoring without wiring your own schedule, the
+daemon does it all:
+
+```ini
+# /etc/systemd/system/bad-daemon.service
+[Unit]
+Description=BAD Behavior Anomaly Detection Daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/bad daemon --config /etc/bad/config.toml
+Restart=on-failure
+RestartSec=30
+User=badsvc
+Group=badsvc
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl enable --now bad-daemon
+```
+
+The daemon handles collection, scoring, alerting and periodic retraining in
+one process. See [Continuous Monitoring Daemon](daemon.md) for the full
+configuration reference.
 
 ## 6. Uninstall
 
