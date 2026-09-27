@@ -7,7 +7,7 @@ build-backend = "hatchling.build"
 # dead Android driver on the name "bad" in 2018 and PyPI keeps names forever.
 # The CLI and the executables stay `bad`, which was always the fun part anyway.
 name = "behavior-anomaly-detection"
-version = "1.0.0"
+version = "1.1.0"
 description = "BAD: Behavior Anomaly Detection. Cross-platform user behavior analytics, anomaly detection, and SIEM alerting."
 readme = "README.md"
 license = "MIT"

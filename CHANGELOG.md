@@ -1,6 +1,21 @@
 # CHANGELOG
 
 
+## v1.1.0 (2026-09-27)
+
+### Features
+
+- Add continuous monitoring daemon with auto-collect, auto-train, and auto-monitor
+  ([`683a018`](https://github.com/well-it-wasnt-me/BAD/commit/683a0186b74f5f5f5851e479a1bb817e8c832616))
+
+The `bad daemon` command loops collect, train and monitor on a configurable timer. All three stages
+  are enabled by default and toggleable via the [daemon] TOML section. Bootstraps its own model on
+  the first cycle, scores only new events via byte-offset tracking, and shuts down gracefully on
+  SIGINT/SIGTERM. Includes --once mode for cron or smoke tests.
+
+Signed-off-by: Well It Wasnt Me <15037424+well-it-wasnt-me@users.noreply.github.com>
+
+
 ## v1.0.0 (2026-09-27)
 
 ### Chores
@@ -11,6 +26,16 @@
 Signed-off-by: Well It Wasnt Me <15037424+well-it-wasnt-me@users.noreply.github.com>
 
 ### Features
+
+- Add continuous monitoring daemon with auto-collect, auto-train, and auto-monitor
+  ([`f4323c7`](https://github.com/well-it-wasnt-me/BAD/commit/f4323c7d126afd6bc7444a6dd8542ea6208693ea))
+
+The `bad daemon` command loops collect, train and monitor on a configurable timer. All three stages
+  are enabled by default and toggleable via the [daemon] TOML section. Bootstraps its own model on
+  the first cycle, scores only new events via byte-offset tracking, and shuts down gracefully on
+  SIGINT/SIGTERM. Includes --once mode for cron or smoke tests.
+
+Signed-off-by: Well It Wasnt Me <15037424+well-it-wasnt-me@users.noreply.github.com>
 
 - Linux interactive installer
   ([`3ed9427`](https://github.com/well-it-wasnt-me/BAD/commit/3ed942782e9c60876ab5280d2463f5dbb797d4ae))
