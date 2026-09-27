@@ -1,0 +1,98 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+# The pip distribution is behavior-anomaly-detection because someone parked a
+# dead Android driver on the name "bad" in 2018 and PyPI keeps names forever.
+# The CLI and the executables stay `bad`, which was always the fun part anyway.
+name = "behavior-anomaly-detection"
+version = "1.1.0"
+description = "BAD: Behavior Anomaly Detection. Cross-platform user behavior analytics, anomaly detection, and SIEM alerting."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+authors = [
+  { name = "Antonio D'Angelo" },
+]
+keywords = [
+  "security",
+  "anomaly-detection",
+  "behavior-analytics",
+  "siem",
+  "user-behavior-analytics",
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Information Technology",
+  "Intended Audience :: System Administrators",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: MacOS",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Security",
+  "Topic :: System :: Monitoring",
+]
+dependencies = [
+  "pydantic>=2.8",
+  "scikit-learn>=1.5",
+  "numpy>=2.0",
+  "typer>=0.12",
+  "rich>=13.7",
+  "httpx>=0.27",
+  "joblib>=1.4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.6", "mypy>=1.11"]
+docs = ["mkdocs>=1.6"]
+build = ["pyinstaller>=6.10"]
+
+[project.scripts]
+bad = "behavior_anomaly.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/behavior_anomaly"]
+
+# Lint and formatting. 120 columns, same as the rest of this project's docs.
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+# B008: typer's whole design is function calls in argument defaults.
+ignore = ["B008"]
+
+[tool.mypy]
+# Runtime supports 3.11+, but numpy's stubs use 3.12 syntax, so type
+# checking targets 3.12. Meet the ecosystem where the ecosystem lives.
+python_version = "3.12"
+packages = ["behavior_anomaly"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Put the repo root on sys.path so tests can do `from tests.conftest import ...`.
+# `python -m pytest` does this for free, but the bare `pytest` script (which is
+# what CI runs) does not, and "works on my laptop" is not a test strategy.
+pythonpath = ["."]
+
+# Semantic versioning on rails. Conventional commits in, version bump and
+# changelog out. The version lives in project.version and __version__ and
+# both get bumped together, because two sources of truth is one too many.
+[tool.semantic_release]
+version_toml = ["pyproject.toml:project.version"]
+version_variables = ["src/behavior_anomaly/__init__.py:__version__"]
+tag_format = "v{version}"
+commit_message = "chore(release): {version} [skip ci]"
+
+[tool.semantic_release.branches.main]
+match = "main"
