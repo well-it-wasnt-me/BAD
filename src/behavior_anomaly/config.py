@@ -12,10 +12,12 @@ telemetry, score it, retrain periodically, ship alerts, repeat until the heat
 death of the universe or someone hits Ctrl-C, whichever comes first.
 """
 
+import ipaddress
 import tomllib
 from pathlib import Path
+from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class DetectionConfig(BaseModel):
@@ -41,11 +43,62 @@ class SiemConfig(BaseModel):
         needs nothing) or "webhook" (HTTP POST, works with roughly every SIEM
         on earth, needs an endpoint). The default is syslog because a webhook
         without an endpoint is just wishful thinking.
+
+    endpoint: webhook URL. Must be http(s) and, by default, must not target a
+        private/loopback/link-local address — a security product shipping its
+        Bearer token to 169.254.169.254 is the kind of mistake that ends
+        careers. Set allow_private_endpoint=true to opt out of that guard for
+        air-gapped lab setups.
     """
 
     kind: str = Field(default="syslog")
     endpoint: str | None = None
     api_key: str | None = None
+    allow_private_endpoint: bool = False
+
+    @field_validator("kind")
+    @classmethod
+    def _validate_kind(cls, value: str) -> str:
+        if value not in ("syslog", "webhook"):
+            raise ValueError(
+                f"Unknown SIEM sink kind: {value!r}. An invalid one is an error, "
+                "because silent misconfiguration is how 'we enabled the SIEM' "
+                "becomes 'we thought we enabled the SIEM'. Try 'webhook' or 'syslog'."
+            )
+        return value
+
+    @model_validator(mode="after")
+    def _validate_endpoint(self) -> "SiemConfig":
+        if self.kind == "webhook" and not self.endpoint:
+            raise ValueError("A webhook sink without an endpoint is just wishful thinking.")
+        if self.endpoint is not None:
+            self._check_endpoint(self.endpoint, self.allow_private_endpoint)
+        return self
+
+    @staticmethod
+    def _check_endpoint(endpoint: str, allow_private: bool) -> None:
+        parsed = urlparse(endpoint)
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError(
+                f"webhook endpoint must be http or https, got {parsed.scheme!r}. "
+                "We are not sending alerts to mystery schemes."
+            )
+        host = parsed.hostname
+        if not host:
+            raise ValueError(f"webhook endpoint {endpoint!r} has no host. We need somewhere to POST.")
+        try:
+            ip = ipaddress.ip_address(host)
+        except ValueError:
+            ip = None
+        if (
+            ip is not None
+            and not allow_private
+            and (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved)
+        ):
+            raise ValueError(
+                f"webhook endpoint {endpoint!r} targets a private/loopback address ({ip}). "
+                "Set allow_private_endpoint=true if this is an intentional air-gapped setup."
+            )
 
 
 class InputDynamicsConfig(BaseModel):
@@ -82,16 +135,22 @@ class DaemonCollectConfig(BaseModel):
         running OS, which is what most people want. Set explicitly only when
         you are testing or running against a non-local source.
 
-    since: time window passed to the collector. For the linux collector this
-        becomes `journalctl --since`. Defaults to one interval back so we
-        overlap slightly and never miss the boundary. Missing a few events
-        is how attackers get a free minute, and we are not in the business
-        of handing out free minutes.
+    since: time window passed to the linux collector. Becomes
+        `journalctl --since`. Defaults to one interval back so we overlap
+        slightly and never miss the boundary. Missing a few events is how
+        attackers get a free minute, and we are not in the business of
+        handing out free minutes.
+
+    source: path for the jsonl collector. Set this when platform="jsonl" so
+        the daemon reads normalized events from a file an external agent
+        writes, instead of shelling out to an OS collector. Ignored for the
+        other platforms (which use `since` or their own defaults).
     """
 
     enabled: bool = True
     platform: str | None = None
     since: str = "5 minutes ago"
+    source: str | None = None
 
 
 class DaemonTrainConfig(BaseModel):

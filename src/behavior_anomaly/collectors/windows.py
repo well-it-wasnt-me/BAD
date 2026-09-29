@@ -14,7 +14,7 @@ still better than localized brittle.
 import json
 import subprocess
 from collections.abc import Iterator
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from behavior_anomaly.collectors.base import Collector
@@ -27,24 +27,60 @@ _EVENT_MAP: dict[int, tuple[EventType, str]] = {
     4688: (EventType.PROCESS, "exec"),
 }
 
+# Log names we will query. An allowlist rather than a free-form string,
+# because `log_name` is interpolated into a PowerShell command: a value
+# containing a single quote breaks out of the string and runs arbitrary
+# PowerShell. We do not take candy from strangers, especially not via -Command.
+_ALLOWED_LOG_NAMES = frozenset({"Security", "System", "Application", "Setup", "ForwardedEvents"})
+
+# How long we wait for PowerShell before giving up. A hung event log is not a
+# reason to hang the daemon.
+_DEFAULT_TIMEOUT = 60.0
+
 
 class WindowsEventLogCollector(Collector):
     """Collects behavioral events from the Windows Security event log."""
 
-    def __init__(self, log_name: str = "Security", event_ids: tuple[int, ...] = (4624, 4625, 4688)) -> None:
+    def __init__(
+        self,
+        log_name: str = "Security",
+        event_ids: tuple[int, ...] = (4624, 4625, 4688),
+        *,
+        timeout: float = _DEFAULT_TIMEOUT,
+    ) -> None:
+        if log_name not in _ALLOWED_LOG_NAMES:
+            raise ValueError(
+                f"log_name {log_name!r} is not allowed. Known: {sorted(_ALLOWED_LOG_NAMES)}. "
+                "An allowlist keeps a stray quote from becoming remote code execution."
+            )
+        for event_id in event_ids:
+            if not isinstance(event_id, int) or isinstance(event_id, bool):
+                raise TypeError(f"event_ids must be ints, got {type(event_id).__name__}: {event_id!r}")
         self.log_name = log_name
         self.event_ids = event_ids
+        self.timeout = timeout
 
     def collect(self) -> Iterator[BehaviorEvent]:
         ids = ",".join(str(event_id) for event_id in self.event_ids)
+        # log_name is allowlisted, so no quoting escape is needed, but we
+        # double single quotes anyway as belt-and-braces against a future
+        # allowlist entry that contains one.
+        safe_log = self.log_name.replace("'", "''")
         script = (
-            f"Get-WinEvent -FilterHashtable @{{LogName='{self.log_name}';Id={ids}}} | ConvertTo-Json -Compress -Depth 4"
+            f"Get-WinEvent -FilterHashtable @{{LogName='{safe_log}';Id={ids}}} "
+            "| ConvertTo-Json -Compress -Depth 4"
         )
-        completed = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", script],
-            capture_output=True,
-            text=True,
-        )
+        try:
+            completed = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", script],
+                capture_output=True,
+                text=True,
+                timeout=self.timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise TimeoutError(
+                f"PowerShell did not finish within {self.timeout}s. The event log may be huge or stuck."
+            ) from exc
         if completed.returncode != 0:
             raise RuntimeError(f"PowerShell failed: {completed.stderr.strip()}")
 
@@ -65,7 +101,12 @@ def parse_win_event(record: dict[str, Any]) -> BehaviorEvent | None:
 
     Pure function, no PowerShell harmed during testing.
     """
-    event_id = int(record.get("Id") or 0)
+    try:
+        event_id = int(record.get("Id") or 0)
+    except (TypeError, ValueError):
+        # Schema drift: an Id that is not an integer is not an event we know
+        # how to map. Skip it instead of aborting the whole collection.
+        return None
     if event_id not in _EVENT_MAP:
         return None
 
@@ -95,10 +136,15 @@ def parse_win_event(record: dict[str, Any]) -> BehaviorEvent | None:
 
 def _parse_timestamp(value: Any) -> datetime:
     """Parse a .NET timestamp string. Python 3.11+ fromisoformat tolerates
-    up to 7 fractional digits, which .NET produces with pride."""
+    up to 7 fractional digits, which .NET produces with pride. A timestamp
+    without a timezone is assumed UTC, matching the macOS collector, so a
+    naive timestamp never poisons downstream tz-aware comparisons."""
     if value is None:
         raise ValueError("Windows event is missing TimeCreated. A log entry without a time is a rumor.")
-    return datetime.fromisoformat(str(value))
+    parsed = datetime.fromisoformat(str(value))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
 
 
 def _field(props: list[Any], index: int) -> str | None:

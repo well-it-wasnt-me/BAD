@@ -28,11 +28,31 @@ class IsolationForestModel(AnomalyModel):
         self.columns: list[str] = []
 
     def fit(self, rows: Sequence[dict[str, float]]) -> None:
-        """Train on feature rows. All rows must carry the same columns."""
+        """Train on feature rows. All rows must carry the same columns.
+
+        The column schema is taken from the first row, then every subsequent
+        row is checked for exactly that key set. A row with extra keys is
+        rejected (do not silently drop features); a row missing keys is
+        rejected with the offending index and columns named, instead of a
+        bare KeyError deep in the matrix build.
+        """
         if not rows:
             raise ValueError("Cannot train on an empty dataset. Even Nostradamus needed data.")
         self.columns = sorted(rows[0])
-        matrix = np.asarray([[row[col] for col in self.columns] for row in rows], dtype=float)
+        expected = set(self.columns)
+        matrix_rows: list[list[float]] = []
+        for index, row in enumerate(rows):
+            keys = set(row)
+            if keys != expected:
+                missing = sorted(expected - keys)
+                extra = sorted(keys - expected)
+                raise ValueError(
+                    f"Row {index} has a different column set than row 0. "
+                    f"missing={missing} extra={extra}. A model trained on "
+                    "one schema must be scored on the same schema."
+                )
+            matrix_rows.append([row[col] for col in self.columns])
+        matrix = np.asarray(matrix_rows, dtype=float)
         self.model.fit(matrix)
 
     def score(self, row: dict[str, float]) -> float:

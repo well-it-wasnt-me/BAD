@@ -124,8 +124,15 @@ def _collect_cycle(
     might be having a moment, life happens. We try again next cycle.
     """
     platform_name = _resolve_platform(config)
-    since = config.collect.since if platform_name == "linux" else None
-    collector = build_collector(platform_name, since)
+    # Pick the right source argument per platform: jsonl wants a path,
+    # linux wants a `--since` string, windows/macos take nothing.
+    if platform_name == "jsonl":
+        source = config.collect.source
+    elif platform_name == "linux":
+        source = config.collect.since
+    else:
+        source = None
+    collector = build_collector(platform_name, source)
     events = list(collector.collect())
     if events:
         JsonlStore(config.events_file).write(events)
@@ -164,6 +171,12 @@ def _monitor_cycle(
     events appended since the last monitor pass, so we do not re-score the
     entire history every cycle. That would be correct but slow, and slow
     is just wrong with extra steps.
+
+    Alert delivery is isolated per-alert: one alert whose send raises is
+    logged and skipped, but the offset still advances past the whole scored
+    batch and the remaining alerts still ship. The alternative — aborting the
+    cycle and re-sending everything next time — produces duplicate alerts in
+    the SIEM, and duplicates are a worse failure mode than one dropped line.
     """
     model_path = config.model_file
     if not model_path.exists():
@@ -179,12 +192,22 @@ def _monitor_cycle(
     detection = app_config.detection
     features = build_features(app_config)
     alerts = detect(events, model, detection, features=features)
-    for alert in alerts:
-        sink.send(alert)
 
-    # Advance the offset past everything we just read.
+    sent = 0
+    for alert in alerts:
+        try:
+            sink.send(alert)
+            sent += 1
+        except Exception:
+            # One alert that fails to ship must not poison the rest of the
+            # batch or hold the byte_offset hostage. Log it, skip it, move on.
+            logger.exception("Failed to send one alert. Skipping it; remaining alerts still ship.")
+
+    # Advance the offset past everything we just scored, regardless of whether
+    # every alert shipped. Re-scoring the same events next cycle would only
+    # re-send the alerts that already succeeded.
     state.byte_offset = config.events_file.stat().st_size
-    return len(events), len(alerts)
+    return len(events), sent
 
 
 def _read_events_since(path: Path, byte_offset: int) -> list[BehaviorEvent]:
@@ -245,11 +268,17 @@ def run_cycle(
     """
     config = app_config.daemon
     result = CycleResult(cycle=state.cycle)
-    state.cycle += 1
 
     if not config.enabled:
         result.skipped.append("daemon disabled")
         return result
+
+    # Decide whether to retrain based on the cycle we are *about to run*, then
+    # increment. Keeping the decision before the increment means the scheduled
+    # retrain cadence (cycle % every_cycles == 0) lines up with the cycle
+    # number we report, instead of being silently off by one.
+    retrain_this_cycle = should_retrain(config, state)
+    state.cycle += 1
 
     # -- Collect ----------------------------------------------------------
     if config.collect.enabled:
@@ -264,7 +293,7 @@ def run_cycle(
         result.skipped.append("collect disabled")
 
     # -- Train ------------------------------------------------------------
-    if should_retrain(config, state):
+    if retrain_this_cycle:
         try:
             result.trained = _train_cycle(config, app_config)
         except Exception:
@@ -276,9 +305,9 @@ def run_cycle(
 
     # -- Monitor ----------------------------------------------------------
     if config.monitor.enabled:
-        if sink is None:
-            sink = build_sink(app_config.siem)
         try:
+            if sink is None:
+                sink = build_sink(app_config.siem)
             scored, alerts = _monitor_cycle(config, app_config, state, sink)
             result.scored = scored
             result.alerts = alerts
@@ -305,6 +334,9 @@ def run_loop(
 
     sink: optional pre-built SIEM sink, passed through to run_cycle. Same
         rationale as run_cycle: tests inject fakes, production builds real.
+        When None, the sink is built ONCE here (not per cycle) so a webhook
+        connection pool is not leaked on every iteration. The sink is closed
+        when the loop exits.
 
     sleep_func: injectable sleep for testing. Real callers leave the default
         (time.sleep). Tests pass a no-op so the loop does not actually wait.
@@ -320,6 +352,20 @@ def run_loop(
     interval = config.interval_seconds
     state = DaemonState()
 
+    # Build the sink once for the loop's lifetime. A webhook sink owns an
+    # httpx connection pool; rebuilding it per cycle leaks sockets over a
+    # long-running daemon. If the sink cannot be built (misconfigured
+    # webhook), surface the error once at startup rather than crash-looping
+    # silently on every cycle.
+    owns_sink = False
+    if sink is None and config.monitor.enabled:
+        try:
+            sink = build_sink(app_config.siem)
+            owns_sink = True
+        except Exception:
+            logger.exception("Could not build the SIEM sink at startup. Alerts will not be shipped.")
+            sink = None
+
     logger.info(
         "Daemon starting: interval=%ds events=%s model=%s",
         interval,
@@ -327,12 +373,19 @@ def run_loop(
         config.model_file,
     )
 
-    while not stop_event.is_set():
-        result = run_cycle(app_config, state, sink=sink)
-        _log_cycle(result)
-        if stop_event.is_set():
-            break
-        _interruptible_sleep(interval, stop_event, sleep_func)
+    try:
+        while not stop_event.is_set():
+            result = run_cycle(app_config, state, sink=sink)
+            _log_cycle(result)
+            if stop_event.is_set():
+                break
+            _interruptible_sleep(interval, stop_event, sleep_func)
+    finally:
+        if owns_sink and sink is not None and hasattr(sink, "close"):
+            try:
+                sink.close()
+            except Exception:
+                logger.exception("Error closing the SIEM sink on shutdown.")
 
     logger.info("Daemon stopped after %d cycle(s).", state.cycle)
 

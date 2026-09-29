@@ -5,6 +5,7 @@ BehaviorEvents and returns either silence (everything looked normal) or a
 typed, vendor-neutral Alert that any SIEM can consume without a translator.
 """
 
+import logging
 from collections.abc import Iterable, Sequence
 
 from behavior_anomaly.config import DetectionConfig
@@ -12,6 +13,8 @@ from behavior_anomaly.detection.windowing import build_windows
 from behavior_anomaly.features.base import FeatureExtractor
 from behavior_anomaly.models.base import AnomalyModel
 from behavior_anomaly.schema import Alert, BehaviorEvent, Severity
+
+logger = logging.getLogger("behavior_anomaly.detection.engine")
 
 EVIDENCE_LIMIT = 5
 
@@ -57,10 +60,21 @@ class DetectionEngine:
         )
 
     def detect(self, events: Iterable[BehaviorEvent]) -> list[Alert]:
-        """Split an event stream into windows and evaluate each one."""
+        """Split an event stream into windows and evaluate each one.
+
+        Per-window evaluation is isolated: a single malformed window (a NaN
+        feature row, a mixed-tz crash, a missing column) is logged and
+        skipped rather than aborting detection for every subsequent window.
+        For a daemon scoring a live event file, one bad bucket must not blind
+        the whole monitoring loop.
+        """
         alerts: list[Alert] = []
         for window in build_windows(events, self.config.window_seconds):
-            alert = self.evaluate(window)
+            try:
+                alert = self.evaluate(window)
+            except Exception:
+                logger.exception("Failed to evaluate one window; skipping it and continuing.")
+                continue
             if alert is not None:
                 alerts.append(alert)
         return alerts
@@ -71,10 +85,16 @@ def _summarize(events: Sequence[BehaviorEvent], limit: int = EVIDENCE_LIMIT) -> 
 
     Kept short on purpose: evidence is a teaser for the analyst, not a
     replacement for the event store. Give them a reason to click through.
+    Membership is set-based and we stop as soon as we hit the limit, so a
+    noisy window with thousands of events does not turn this into O(n*k).
     """
-    seen: list[str] = []
+    seen: set[str] = set()
+    out: list[str] = []
     for event in events:
         summary = f"{event.event_type.value}:{event.action}"
         if summary not in seen:
-            seen.append(summary)
-    return seen[:limit]
+            seen.add(summary)
+            out.append(summary)
+            if len(out) >= limit:
+                break
+    return out

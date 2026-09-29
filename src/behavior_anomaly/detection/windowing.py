@@ -33,7 +33,15 @@ def build_windows(
         key = (event.host_id, event.user_id, bucket)
         groups.setdefault(key, []).append(event)
 
-    return [sorted(groups[key], key=lambda event: event.timestamp) for key in sorted(groups)]
+    # Sort each window by the epoch-normalized timestamp, not the raw
+    # datetime, so a window that mixes tz-aware and tz-naive events (a
+    # collector emitting a naive timestamp once) does not crash on the
+    # comparison. Tolerance of naive timestamps is a documented promise of
+    # this module; honoring it at sort time, not just bucket time, keeps it.
+    return [
+        sorted(groups[key], key=lambda event: _epoch_seconds(event.timestamp))
+        for key in sorted(groups)
+    ]
 
 
 def _epoch_seconds(timestamp: datetime) -> float:

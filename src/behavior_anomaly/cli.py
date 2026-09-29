@@ -16,6 +16,7 @@ import threading
 from pathlib import Path
 
 import typer
+from pydantic import ValidationError
 
 from behavior_anomaly import pipeline
 from behavior_anomaly.collectors import build_collector
@@ -40,13 +41,21 @@ def load_config(config: Path | None) -> AppConfig:
 
     A config file that does not exist is an error, not a silent default: the
     admin pointed at a file, and pretending we honored it would be the kind
-    of lie that shows up in an incident report.
+    of lie that shows up in an incident report. A config that fails
+    validation (an unknown SIEM kind, a webhook without an endpoint, an
+    out-of-range knob) is reported as a clean CLI error, not a traceback.
     """
     if config is None:
-        return AppConfig()
+        try:
+            return AppConfig()
+        except ValidationError as exc:
+            raise typer.BadParameter(str(exc)) from exc
     if not config.exists():
         raise typer.BadParameter(f"config file not found: {config}")
-    return AppConfig.load(config)
+    try:
+        return AppConfig.load(config)
+    except ValidationError as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
 
 @app.command()
@@ -78,14 +87,16 @@ def train(
 ) -> None:
     """Train an anomaly model from normalized events."""
     app_config = load_config(config_path)
-    # Command line flags win over the config file, but only where typed.
-    overrides = {
-        "window_seconds": window_seconds,
-        "contamination": contamination,
-        "min_events": min_events,
-    }
     detection = app_config.detection.model_copy(
-        update={key: value for key, value in overrides.items() if value is not None}
+        update={
+            key: value
+            for key, value in {
+                "window_seconds": window_seconds,
+                "contamination": contamination,
+                "min_events": min_events,
+            }.items()
+            if value is not None
+        }
     )
     features = pipeline.build_features(app_config)
 
@@ -108,18 +119,32 @@ def score(
     app_config = load_config(config_path)
     detection = app_config.detection
     if threshold is not None:
-        detection = detection.model_copy(update={"anomaly_threshold": threshold})
+        try:
+            detection = detection.model_copy(update={"anomaly_threshold": threshold})
+        except ValidationError as exc:
+            raise typer.BadParameter(str(exc)) from exc
     features = pipeline.build_features(app_config)
 
     events = JsonlStore(input).iter_events()
     alerts = pipeline.detect(events, load_model(model), detection, features=features)
 
     if output is not None:
-        JsonlAlertStore(output).write(alerts)
-
-    for alert in alerts:
-        rendered = to_ecs(alert) if ecs else json.loads(alert.model_dump_json())
-        typer.echo(json.dumps(rendered))
+        output_path = Path(output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        if ecs:
+            # ECS on disk too, so a downstream ECS consumer wired to --output
+            # is not silently handed the native Alert schema.
+            with output_path.open("w", encoding="utf-8") as fh:
+                for alert in alerts:
+                    fh.write(json.dumps(to_ecs(alert)) + "\n")
+        else:
+            JsonlAlertStore(output).write(alerts)
+    else:
+        # No output file: print alerts to stdout. With --output we stay quiet
+        # on stdout (just the count) so piping the file is not duplicated.
+        for alert in alerts:
+            rendered = to_ecs(alert) if ecs else json.loads(alert.model_dump_json())
+            typer.echo(json.dumps(rendered))
     typer.echo(f"{len(alerts)} alert(s)")
 
 
@@ -137,22 +162,31 @@ def monitor(
     app_config = load_config(config_path)
     detection = app_config.detection
     if threshold is not None:
-        detection = detection.model_copy(update={"anomaly_threshold": threshold})
+        try:
+            detection = detection.model_copy(update={"anomaly_threshold": threshold})
+        except ValidationError as exc:
+            raise typer.BadParameter(str(exc)) from exc
     features = pipeline.build_features(app_config)
 
     siem_config = app_config.siem
-    sink_overrides = {
-        "kind": siem,
-        "endpoint": endpoint,
-        "api_key": api_key,
-    }
-    siem_config = siem_config.model_copy(
-        update={key: value for key, value in sink_overrides.items() if value is not None}
-    )
+    try:
+        siem_config = siem_config.model_copy(
+            update={
+                key: value
+                for key, value in {"kind": siem, "endpoint": endpoint, "api_key": api_key}.items()
+                if value is not None
+            }
+        )
+    except ValidationError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     sink = build_sink(siem_config)
 
-    events = JsonlStore(input).iter_events()
-    alerts = pipeline.monitor(events, load_model(model), detection, sink, features=features)
+    try:
+        events = JsonlStore(input).iter_events()
+        alerts = pipeline.monitor(events, load_model(model), detection, sink, features=features)
+    finally:
+        if hasattr(sink, "close"):
+            sink.close()
     typer.echo(f"Sent {len(alerts)} alert(s) to the {siem_config.kind} sink")
 
 
@@ -192,8 +226,23 @@ def daemon(
     if once:
         # One cycle, no loop, no signal handling. The training-wheels mode.
         from behavior_anomaly.daemon import DaemonState, run_cycle
+        from behavior_anomaly.siem import build_sink as _build_once_sink
 
-        result = run_cycle(app_config, DaemonState())
+        # Build the sink once and close it so a webhook connection pool is
+        # not left dangling (run_cycle itself never closes an injected sink,
+        # because run_loop reuses one across cycles).
+        sink = None
+        if daemon_config.monitor.enabled:
+            try:
+                sink = _build_once_sink(app_config.siem)
+            except Exception as exc:
+                typer.echo(f"Could not build the SIEM sink: {exc}")
+                raise typer.Exit(code=1) from exc
+        try:
+            result = run_cycle(app_config, DaemonState(), sink=sink)
+        finally:
+            if sink is not None and hasattr(sink, "close"):
+                sink.close()
         typer.echo(
             f"cycle={result.cycle} collected={result.collected} "
             f"trained={result.trained} scored={result.scored} "
@@ -233,7 +282,7 @@ def check_config(
         f"min_events={detection.min_events}"
     )
     typer.echo(
-        f"  siem: kind={siem.kind} endpoint_set={siem.endpoint is not None} api_key_set={siem.api_key is not None}"
+        f"  siem: kind={siem.kind} endpoint_set={siem.endpoint is not None}"
     )
     typer.echo(
         f"  input_dynamics: enabled={input_dynamics.enabled} "

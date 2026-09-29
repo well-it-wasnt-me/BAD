@@ -6,8 +6,10 @@ features answer "was the human at the keyboard the usual human", which is a
 question process telemetry cannot even hear, let alone answer.
 """
 
+import math
 from collections import Counter
 from collections.abc import Sequence
+from datetime import UTC, datetime
 
 from behavior_anomaly.features.base import FeatureExtractor
 from behavior_anomaly.schema import BehaviorEvent, EventType
@@ -121,31 +123,38 @@ def _input_features(events: Sequence[BehaviorEvent]) -> dict[str, float]:
     12 direction changes". We read ONLY those whitelisted timing and motion
     keys. Keystroke content is not a field we read, and privacy by
     construction beats privacy by promise.
+
+    Events are sorted by timestamp here so the span math does not depend on
+    the caller's ordering, and timestamps are normalized to UTC before
+    subtraction so a mix of tz-aware and tz-naive input events cannot crash
+    the feature extractor.
     """
-    typing = [event for event in events if event.event_type == EventType.INPUT and event.action == "typing"]
-    mouse = [event for event in events if event.event_type == EventType.INPUT and event.action == "mouse"]
-    input_total = sum(event.event_type == EventType.INPUT for event in events)
+    ordered = sorted(events, key=lambda event: _epoch_seconds(event.timestamp))
+    typing = [event for event in ordered if event.event_type == EventType.INPUT and event.action == "typing"]
+    mouse = [event for event in ordered if event.event_type == EventType.INPUT and event.action == "mouse"]
+    input_total = sum(event.event_type == EventType.INPUT for event in ordered)
 
     keystrokes = sum(_num(event.metadata.get("keystrokes")) for event in typing)
 
-    span_seconds = (events[-1].timestamp - events[0].timestamp).total_seconds()
-    velocity = keystrokes * 60.0 / span_seconds if span_seconds > 0 else 0.0
+    # Normalize typing velocity by active typing duration (the sum of per-
+    # typing-event duration_ms), the same basis mouse speed uses, so the two
+    # "rate" features are comparable instead of one being window-shape-
+    # dependent. Fall back to the window span only when no durations exist,
+    # which preserves the original semantics for agents that omit duration_ms.
+    typing_duration_ms = sum(_num(event.metadata.get("duration_ms")) for event in typing)
+    if typing_duration_ms > 0:
+        velocity = keystrokes * 60.0 / (typing_duration_ms / 1000.0)
+    else:
+        span_seconds = (_epoch_seconds(ordered[-1].timestamp) - _epoch_seconds(ordered[0].timestamp))
+        velocity = keystrokes * 60.0 / span_seconds if span_seconds > 0 else 0.0
 
+    # Weighted means pair keystrokes with their per-aggregate interval stats.
+    # The denominator only counts keystrokes from events that actually carry
+    # the paired field, so an event reporting keystrokes without a
+    # mean_interval_ms does not drag the reported mean toward zero.
     if keystrokes:
-        mean_interval = (
-            sum(
-                _num(event.metadata.get("mean_interval_ms")) * _num(event.metadata.get("keystrokes"))
-                for event in typing
-            )
-            / keystrokes
-        )
-        stddev_interval = (
-            sum(
-                _num(event.metadata.get("stddev_interval_ms")) * _num(event.metadata.get("keystrokes"))
-                for event in typing
-            )
-            / keystrokes
-        )
+        mean_interval = _weighted_mean(typing, "mean_interval_ms", "keystrokes")
+        stddev_interval = _weighted_mean(typing, "stddev_interval_ms", "keystrokes")
     else:
         mean_interval = 0.0
         stddev_interval = 0.0
@@ -167,20 +176,66 @@ def _input_features(events: Sequence[BehaviorEvent]) -> dict[str, float]:
     }
 
 
+def _weighted_mean(typing: Sequence[BehaviorEvent], value_field: str, weight_field: str) -> float:
+    """Keystroke-weighted mean of a per-aggregate field, counting only events
+    that carry both the value and the weight. Returns 0.0 when nothing
+    qualifies.
+
+    Note on the stddev feature: this is a weighted mean of per-aggregate
+    stddev_interval_ms values, NOT a pooled standard deviation across the
+    whole window. Pooling requires per-aggregate means we do not always have;
+    the name is kept for model compatibility and the statistic is what it is,
+    documented honestly here rather than implied to be something it is not.
+    """
+    numerator = 0.0
+    denominator = 0.0
+    for event in typing:
+        if value_field not in event.metadata or weight_field not in event.metadata:
+            continue
+        weight = _num(event.metadata.get(weight_field))
+        if weight <= 0:
+            continue
+        numerator += _num(event.metadata.get(value_field)) * weight
+        denominator += weight
+    return numerator / denominator if denominator > 0 else 0.0
+
+
+def _epoch_seconds(timestamp: datetime) -> float:
+    """Epoch seconds for a timestamp, tolerating naive datetimes (assume UTC).
+
+    Mirrors windowing._epoch_seconds so subtraction across a mixed-tz window
+    does not raise TypeError.
+    """
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=UTC)
+    return timestamp.timestamp()
+
+
 def _num(value: str | int | float | bool | None) -> float:
     """Coerce a metadata value to a number, tolerating sloppy agents.
 
     Metadata is free-form by design, so agents can attach anything. We only
-    ever pull numbers out of it, and anything that is not a number is a zero
-    we ignore rather than a crash we cause.
+    ever pull numbers out of it, and anything that is not a finite number is
+    a zero we ignore rather than a crash we cause. Non-finite floats
+    (`float("nan")`, `float("inf")`) succeed at the `float()` call but would
+    poison the feature vector and crash sklearn downstream, so they are
+    rejected here too.
+
+    `bool` is checked before `int` because `bool` is an `int` subclass in
+    Python (`True == 1`); an agent that sends `"keystrokes": true` gets a
+    deliberate 0.0 rather than silently becoming one keystroke.
     """
     if isinstance(value, bool):
         return 0.0
     if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
+        result = float(value)
+    elif isinstance(value, str):
         try:
-            return float(value)
+            result = float(value)
         except ValueError:
             return 0.0
-    return 0.0
+    else:
+        return 0.0
+    if not math.isfinite(result):
+        return 0.0
+    return result
