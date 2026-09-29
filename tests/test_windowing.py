@@ -1,5 +1,7 @@
 """Tests for time windowing. Buckets, not vibes."""
 
+from datetime import timedelta
+
 import pytest
 from tests.conftest import T0, make_event
 
@@ -57,3 +59,14 @@ def test_naive_timestamps_tolerated():
     windows = build_windows([naive], 300)
     assert len(windows) == 1
     assert windows[0][0].platform == Platform.LINUX
+
+
+def test_mixed_naive_and_aware_in_one_window_does_not_crash():
+    # The old sort compared raw datetimes and raised TypeError on a window
+    # that mixed tz-aware and tz-naive events. Bucketing tolerated naive;
+    # sorting did not, which broke the documented promise.
+    aware = make_event(0)
+    naive = make_event(1).model_copy(update={"timestamp": (T0.replace(tzinfo=None) + timedelta(seconds=1))})
+    windows = build_windows([aware, naive], 300)
+    assert len(windows) == 1
+    assert len(windows[0]) == 2

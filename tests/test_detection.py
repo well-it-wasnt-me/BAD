@@ -88,3 +88,62 @@ def test_mixed_event_types_flow_through():
     assert alert is not None
     assert alert.feature_vector["failed_events"] == 1.0
     assert alert.feature_vector["privileged_events"] == 1.0
+
+
+# --------------------------------------------------- detection hardening
+
+
+def test_evidence_cap_actually_limits_to_five():
+    # The old "capped" test used 20 identical events and only exercised dedup.
+    # Build >5 distinct type:action pairs and assert the cap bites at 5.
+    pairs = [
+        (EventType.PROCESS, "exec"),
+        (EventType.AUTH, "login"),
+        (EventType.NETWORK, "connect"),
+        (EventType.FILE, "write"),
+        (EventType.SHELL, "command"),
+        (EventType.PRIVILEGE, "sudo"),
+        (EventType.SESSION, "start"),
+    ]
+    events = [make_event(i, event_type=t, action=a) for i, (t, a) in enumerate(pairs)]
+    alert = _engine(0.9).evaluate(events)
+    assert alert is not None
+    assert len(alert.evidence) == 5
+    # Insertion order preserved; first five distinct pairs.
+    assert alert.evidence == [f"{t.value}:{a}" for t, a in pairs[:5]]
+
+
+def test_detect_isolates_per_window_errors():
+    # A model that explodes on one window must not blind the whole batch.
+    class FlakyModel(AnomalyModel):
+        name = "flaky"
+        _calls = 0
+
+        def fit(self, rows):  # noqa: ANN001
+            pass
+
+        def score(self, row):  # noqa: ANN001
+            FlakyModel._calls += 1
+            if FlakyModel._calls == 1:
+                raise RuntimeError("boom on the first window")
+            return 0.9
+
+    from behavior_anomaly.detection.engine import DetectionEngine
+
+    engine = DetectionEngine(FlakyModel(), BehavioralFeatures(), DetectionConfig())
+    events = [make_event(offset) for offset in range(0, 600, 10)]  # two windows
+    alerts = engine.detect(events)
+    # First window blew up and was skipped; second window still produced an alert.
+    assert len(alerts) == 1
+
+
+def test_detect_partitions_by_user_end_to_end():
+    # The old detect test used one user. Cross-user partitioning must flow
+    # through the engine end-to-end, not just the windowing helper.
+    events = [make_event(offset, user_id="alice") for offset in range(0, 600, 10)]
+    events += [make_event(offset, user_id="bob") for offset in range(0, 600, 10)]
+    alerts = _engine(0.9).detect(events)
+    # Two users x two buckets = four alerts.
+    assert len(alerts) == 4
+    users = {a.user_id for a in alerts}
+    assert users == {"alice", "bob"}

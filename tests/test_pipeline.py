@@ -82,7 +82,11 @@ def test_build_features_respects_the_input_dynamics_toggle():
 def test_input_dynamics_flow_end_to_end():
     # The whole belt with input events in the stream: train with input
     # features on, then score the same stream through the same features.
-    config = DetectionConfig()
+    # A degenerate 2-row IsolationForest baseline can score everything as
+    # normal and produce zero alerts, which would make `all(...)` vacuously
+    # pass. Drop the threshold to zero so at least one alert is guaranteed
+    # and the input-dynamics path is actually exercised.
+    config = DetectionConfig(anomaly_threshold=0.0)
     features = BehavioralFeatures(include_input_dynamics=True)
     events = [make_event(offset) for offset in range(0, 600, 10)]
     events.append(
@@ -96,6 +100,7 @@ def test_input_dynamics_flow_end_to_end():
     )
     model = train_model(events, config, features=features)
     alerts = detect(events, model, config, features=features)
-    # StubModel is not involved here; we only prove the plumbing accepts the
-    # input vector, not that IsolationForest has opinions about our typing.
+    # The point is to prove the plumbing accepts the input vector, so we
+    # require at least one alert before asserting on its feature_vector.
+    assert alerts, "threshold=0 must produce at least one alert to exercise the path"
     assert all("keystrokes" in alert.feature_vector for alert in alerts)

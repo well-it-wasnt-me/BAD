@@ -420,3 +420,105 @@ def test_cli_check_config_example_includes_daemon():
     result = runner.invoke(app, ["check-config", "--config", str(REPO_ROOT / "config.example.toml")])
     assert result.exit_code == 0
     assert "daemon:" in result.output
+
+
+# --------------------------------------------------- CLI hardening
+
+
+def test_cli_check_config_rejects_invalid_siem_kind(tmp_path):
+    # check-config must catch an unknown SIEM kind at load time, not smile
+    # and report "config OK" only for the daemon to fail at first send.
+    config = tmp_path / "config.toml"
+    config.write_text('[siem]\nkind = "carrier-pigeon"\n', encoding="utf-8")
+    result = runner.invoke(app, ["check-config", "--config", str(config)])
+    assert result.exit_code != 0
+
+
+def test_cli_check_config_rejects_webhook_without_endpoint(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text('[siem]\nkind = "webhook"\n', encoding="utf-8")
+    result = runner.invoke(app, ["check-config", "--config", str(config)])
+    assert result.exit_code != 0
+
+
+def test_cli_check_config_does_not_leak_api_key_presence(tmp_path):
+    # api_key_set was an info leak to stdout/logs; it must be gone.
+    config = tmp_path / "config.toml"
+    config.write_text(
+        '[siem]\nkind = "webhook"\nendpoint = "https://x"\napi_key = "secret"\n', encoding="utf-8"
+    )
+    result = runner.invoke(app, ["check-config", "--config", str(config)])
+    assert result.exit_code == 0
+    assert "api_key_set" not in result.output
+
+
+def test_cli_score_with_ecs_writes_ecs_to_output_file(tmp_path, benign_events):
+    # --ecs must shape the --output file too, not just stdout, so a downstream
+    # ECS consumer wired to the file is not silently handed the native Alert.
+    events = tmp_path / "events.jsonl"
+    write_events(events, benign_events)
+    model = tmp_path / "model.joblib"
+    runner.invoke(app, ["train", "--input", str(events), "--output", str(model)])
+
+    alerts = tmp_path / "alerts.jsonl"
+    result = runner.invoke(
+        app,
+        ["score", "--input", str(events), "--model", str(model), "--output", str(alerts), "--ecs"],
+    )
+    assert result.exit_code == 0
+    written = alerts.read_text(encoding="utf-8").strip()
+    if written:
+        # ECS records carry @timestamp and event.kind, native Alerts do not.
+        line = json.loads(written.splitlines()[0])
+        assert "@timestamp" in line
+        assert line["event"]["kind"] == "alert"
+
+
+def test_cli_score_with_output_is_quiet_on_stdout(tmp_path, benign_events):
+    # With --output, per-alert lines go to the file; stdout should carry only
+    # the summary count, not duplicate alert JSON.
+    events = tmp_path / "events.jsonl"
+    write_events(events, benign_events)
+    model = tmp_path / "model.joblib"
+    runner.invoke(app, ["train", "--input", str(events), "--output", str(model)])
+
+    alerts = tmp_path / "alerts.jsonl"
+    result = runner.invoke(
+        app, ["score", "--input", str(events), "--model", str(model), "--output", str(alerts)]
+    )
+    assert result.exit_code == 0
+    # The only non-empty stdout lines should be the "N alert(s)" summary.
+    non_blank = [line for line in result.output.splitlines() if line.strip()]
+    assert non_blank == ["0 alert(s)"] or all("alert(s)" in line for line in non_blank)
+    # And no raw alert JSON object printed to stdout.
+    assert '"score"' not in result.output
+
+
+def test_cli_train_invalid_flag_gives_clean_error_not_traceback(tmp_path, benign_events):
+    # An out-of-range flag must surface as a clean CLI error, not a pydantic
+    # ValidationError traceback.
+    events = tmp_path / "events.jsonl"
+    write_events(events, benign_events)
+    model = tmp_path / "model.joblib"
+    result = runner.invoke(
+        app, ["train", "--input", str(events), "--output", str(model), "--window-seconds", "0"]
+    )
+    assert result.exit_code != 0
+    assert "ValidationError" not in (result.output + str(result.exception))
+
+
+def test_cli_score_with_zero_threshold_produces_alerts(tmp_path, benign_events):
+    # The default score/monitor tests assert only on "alert(s)", which is
+    # printed even when zero alerts are produced. With threshold 0 every
+    # window clears the bar, so this test genuinely verifies the alert path.
+    events = tmp_path / "events.jsonl"
+    write_events(events, benign_events)
+    model = tmp_path / "model.joblib"
+    runner.invoke(app, ["train", "--input", str(events), "--output", str(model)])
+
+    result = runner.invoke(
+        app, ["score", "--input", str(events), "--model", str(model), "--threshold", "0"]
+    )
+    assert result.exit_code == 0
+    # Two windows of benign events -> two alerts at threshold 0.
+    assert "2 alert(s)" in result.output

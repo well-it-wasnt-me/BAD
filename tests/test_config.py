@@ -98,3 +98,44 @@ def test_input_dynamics_config_defaults():
     config = InputDynamicsConfig()
     assert config.enabled is True
     assert config.sampler_interval_seconds == 30
+
+
+# --------------------------------------------------- SIEM validation (M1, H9)
+
+
+def test_invalid_siem_kind_rejected(tmp_path: Path):
+    path = tmp_path / "config.toml"
+    path.write_text('[siem]\nkind = "carrier-pigeon"\n', encoding="utf-8")
+    with pytest.raises(ValueError, match="Unknown SIEM sink kind"):
+        AppConfig.load(path)
+
+
+def test_webhook_kind_without_endpoint_rejected(tmp_path: Path):
+    # check-config must catch this at load time, not at first send.
+    path = tmp_path / "config.toml"
+    path.write_text('[siem]\nkind = "webhook"\n', encoding="utf-8")
+    with pytest.raises(ValueError, match="wishful thinking"):
+        AppConfig.load(path)
+
+
+def test_webhook_endpoint_must_be_http_or_https():
+    from behavior_anomaly.config import SiemConfig
+
+    with pytest.raises(ValueError, match="http or https"):
+        SiemConfig(kind="webhook", endpoint="ftp://siem.example.test/x")
+
+
+def test_webhook_private_ip_endpoint_rejected_by_default():
+    from behavior_anomaly.config import SiemConfig
+
+    with pytest.raises(ValueError, match="private/loopback"):
+        SiemConfig(kind="webhook", endpoint="http://169.254.169.254/latest/meta-data")
+
+
+def test_webhook_private_ip_endpoint_allowed_with_opt_in():
+    from behavior_anomaly.config import SiemConfig
+
+    config = SiemConfig(
+        kind="webhook", endpoint="http://127.0.0.1:9000/hook", allow_private_endpoint=True
+    )
+    assert config.endpoint == "http://127.0.0.1:9000/hook"

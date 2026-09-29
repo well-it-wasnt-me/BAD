@@ -92,3 +92,61 @@ def test_save_creates_parent_directories(tmp_path, benign_events):
     model.fit(_rows(benign_events))
     save_model(model, tmp_path / "deep" / "nested" / "model.joblib")
     assert (tmp_path / "deep" / "nested" / "model.joblib").exists()
+
+
+# --------------------------------------------------- model hardening
+
+
+def test_fit_rejects_inconsistent_column_sets():
+    # A row missing a key the first row had, and a row with an extra key,
+    # both must raise a descriptive error instead of a bare KeyError.
+    model = IsolationForestModel()
+    rows = [
+        {"a": 1.0, "b": 2.0},
+        {"a": 1.0},  # missing b
+    ]
+    with pytest.raises(ValueError, match="different column set"):
+        model.fit(rows)
+
+
+def test_fit_rejects_extra_columns():
+    model = IsolationForestModel()
+    rows = [
+        {"a": 1.0, "b": 2.0},
+        {"a": 1.0, "b": 2.0, "c": 3.0},  # extra
+    ]
+    with pytest.raises(ValueError, match="extra"):
+        model.fit(rows)
+
+
+def test_save_load_with_hmac_signature_roundtrip(tmp_path, benign_events):
+    # With a secret, save_model writes a .sig file and load_model verifies it
+    # before unpickling. A roundtrip with the right secret must work.
+    model = IsolationForestModel()
+    model.fit(_rows(benign_events))
+    path = tmp_path / "model.joblib"
+    save_model(model, path, secret=b"not-the-real-key")
+    assert (tmp_path / "model.joblib.sig").exists()
+    revived = load_model(path, secret=b"not-the-real-key")
+    row = BehavioralFeatures().extract(benign_events[:30])
+    assert revived.score(row) == model.score(row)
+
+
+def test_load_with_hmac_rejects_tampered_model(tmp_path, benign_events):
+    model = IsolationForestModel()
+    model.fit(_rows(benign_events))
+    path = tmp_path / "model.joblib"
+    save_model(model, path, secret=b"good-key")
+    # Tamper with the model bytes after the signature was written.
+    path.write_bytes(path.read_bytes() + b"\x00")
+    with pytest.raises(ValueError, match="signature mismatch"):
+        load_model(path, secret=b"good-key")
+
+
+def test_load_with_hmac_rejects_missing_signature(tmp_path, benign_events):
+    model = IsolationForestModel()
+    model.fit(_rows(benign_events))
+    path = tmp_path / "model.joblib"
+    save_model(model, path)  # no secret -> no .sig
+    with pytest.raises(ValueError, match="signature missing"):
+        load_model(path, secret=b"some-secret")

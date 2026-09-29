@@ -29,12 +29,19 @@ def _alert() -> Alert:
     )
 
 
-def test_syslog_sink_writes_structured_alert(caplog):
-    with caplog.at_level(logging.WARNING, logger="behavior-anomaly"):
-        SyslogSink().send(_alert())
-    assert "SIEM_ALERT" in caplog.text
-    # The payload must be parseable JSON, not vibes.
-    payload = caplog.records[0].getMessage().split("SIEM_ALERT ", 1)[1]
+def test_syslog_sink_writes_structured_alert():
+    # The syslog sink does not propagate to the root logger (it owns its own
+    # handler so the daemon's basicConfig does not double-log every alert),
+    # so we capture from the named logger directly instead of via caplog.
+    records: list[logging.LogRecord] = []
+    sink = SyslogSink(logger_name="behavior-anomaly.test-capture")
+    sink.logger.addHandler(type("H", (logging.Handler,), {"emit": lambda self, r: records.append(r)})())
+    try:
+        sink.send(_alert())
+    finally:
+        sink.logger.handlers.clear()
+    assert records, "SyslogSink must actually emit a record"
+    payload = records[0].getMessage().split("SIEM_ALERT ", 1)[1]
     assert json.loads(payload)["score"] == 0.9
 
 
@@ -68,6 +75,8 @@ def test_webhook_sink_raises_on_server_error():
     sink = WebhookSink(
         "https://siem.example.test/hook",
         client=httpx.Client(transport=httpx.MockTransport(handler)),
+        max_retries=0,
+        sleep_func=lambda _s: None,
     )
     # A lost alert is worse than a raised exception. Silence is for libraries.
     with pytest.raises(httpx.HTTPStatusError):
@@ -114,3 +123,93 @@ def test_sinks_are_interchangeable():
     for sink in sinks:
         sink.send(_alert())  # no explosion, no translation layer needed
     sinks[1].close()
+
+
+# ----------------------------------------------------- new behavior coverage
+
+
+def test_webhook_sink_follows_redirect_to_success():
+    # A 302 to the real ingestion path must deliver the alert, not silently
+    # drop it. raise_for_status alone lets 3xx pass quietly; the explicit
+    # is_success check plus follow_redirects is what keeps alerts alive.
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        if request.url.path == "/hook":
+            return httpx.Response(302, headers={"Location": "https://siem.example.test/ingest"})
+        return httpx.Response(200)
+
+    sink = WebhookSink(
+        "https://siem.example.test/hook",
+        client=httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=True),
+    )
+    sink.send(_alert())  # must not raise
+    sink.close()
+    assert "/ingest" in calls[-1]
+
+
+def test_webhook_sink_retries_then_succeeds_on_transient_503():
+    # A momentary 503 from the SIEM should not lose the alert for the cycle.
+    attempts = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts["n"] += 1
+        return httpx.Response(503) if attempts["n"] < 3 else httpx.Response(200)
+
+    sink = WebhookSink(
+        "https://siem.example.test/hook",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        max_retries=3,
+        backoff_seconds=0,
+        sleep_func=lambda _s: None,
+    )
+    sink.send(_alert())  # third attempt succeeds
+    sink.close()
+    assert attempts["n"] == 3
+
+
+def test_webhook_sink_gives_up_after_max_retries():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503)
+
+    sink = WebhookSink(
+        "https://siem.example.test/hook",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        max_retries=2,
+        backoff_seconds=0,
+        sleep_func=lambda _s: None,
+    )
+    with pytest.raises(httpx.HTTPStatusError):
+        sink.send(_alert())
+    sink.close()
+
+
+def test_webhook_sink_no_api_key_omits_authorization_header():
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["headers"] = dict(request.headers)
+        return httpx.Response(200)
+
+    sink = WebhookSink(
+        "https://siem.example.test/hook",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    sink.send(_alert())
+    sink.close()
+    assert "authorization" not in captured["headers"]
+
+
+def test_syslog_sink_has_a_handler_attached():
+    # "syslog" must actually wire up a handler, not just log into the void.
+    sink = SyslogSink(logger_name="behavior-anomaly.test-syslog")
+    assert sink.logger.handlers, "SyslogSink must attach a real handler"
+    sink.logger.handlers.clear()  # avoid leaking handlers across tests
+
+
+def test_ecs_category_derived_from_evidence():
+    alert = _alert()
+    alert = alert.model_copy(update={"evidence": ["auth:login", "network:connect"]})
+    ecs = to_ecs(alert)
+    assert ecs["event"]["category"] == ["authentication", "network"]

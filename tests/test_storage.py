@@ -1,5 +1,6 @@
 """Tests for storage: events and alerts on disk."""
 
+import pytest
 from tests.conftest import make_event
 
 from behavior_anomaly.schema import Alert, Platform, Severity
@@ -82,3 +83,72 @@ def test_alert_store_overwrites_previous_run(tmp_path):
     store.write([alert])
     # The last scoring run is the truth. History wears a trench coat.
     assert len(store.path.read_text(encoding="utf-8").strip().splitlines()) == 1
+
+
+# --------------------------------------------------- storage hardening
+
+
+def test_jsonl_iter_events_skips_corrupt_lines(tmp_path, caplog):
+    # One corrupt line must not poison the whole file. It is logged and
+    # skipped, and the good events around it still come through.
+    import logging
+
+    path = tmp_path / "events.jsonl"
+    good = make_event(0).model_dump_json()
+    path.write_text(f"{good}\nnot-valid-json-at-all\n{good}\n", encoding="utf-8")
+    with caplog.at_level(logging.WARNING, logger="behavior_anomaly.storage.jsonl"):
+        events = JsonlStore(path).read()
+    assert len(events) == 2
+    assert "corrupt" in caplog.text
+
+
+def test_jsonl_write_creates_parent_directories(tmp_path):
+    # A fresh install with /var/lib/bad/events.jsonl must bootstrap without a
+    # manual mkdir, matching the alert store and save_model.
+    path = tmp_path / "nested" / "deep" / "events.jsonl"
+    JsonlStore(path).write([make_event(0)])
+    assert path.exists()
+    assert len(JsonlStore(path).read()) == 1
+
+
+def test_alert_store_write_is_atomic_on_serialization_failure(tmp_path):
+    # If serialization fails partway through, the previous run's alerts must
+    # still be on disk — truncate-then-stream would have destroyed them.
+    store = JsonlAlertStore(tmp_path / "alerts.jsonl")
+    first = Alert(
+        score=0.9,
+        severity=Severity.CRITICAL,
+        host_id="host-1",
+        user_id="alice",
+        platform=Platform.LINUX,
+        model="isolation_forest",
+        window_seconds=300,
+    )
+    store.write([first])
+    assert store.path.exists()
+
+    class NotAnAlert:
+        def model_dump_json(self) -> str:
+            raise TypeError("not an alert")
+
+    with pytest.raises(TypeError):
+        store.write([NotAnAlert()])  # type: ignore[list-item]
+    # The original alert survives the failed write.
+    revived = store.read()
+    assert len(revived) == 1
+    assert revived[0].user_id == "alice"
+
+
+def test_alert_store_read_roundtrips(tmp_path):
+    store = JsonlAlertStore(tmp_path / "alerts.jsonl")
+    alert = Alert(
+        score=0.7,
+        severity=Severity.HIGH,
+        host_id="host-2",
+        user_id="bob",
+        platform=Platform.WINDOWS,
+        model="isolation_forest",
+        window_seconds=300,
+    )
+    store.write([alert])
+    assert store.read() == [alert]

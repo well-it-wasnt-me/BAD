@@ -418,6 +418,158 @@ def test_run_loop_disabled_daemon_does_nothing(tmp_path):
     assert not config.daemon.events_file.exists()
 
 
+# --------------------------------------------------- daemon hardening
+
+
+def test_run_loop_builds_sink_once_and_closes_it(tmp_path, benign_events, monkeypatch):
+    # The loop must build the webhook sink once (not per cycle) and close it
+    # on exit. A per-cycle rebuild leaks an httpx connection pool.
+    builds = {"n": 0}
+    closes = {"n": 0}
+
+    class RecordingSink(SiemSink):
+        def __init__(self) -> None:
+            builds["n"] += 1
+            self.alerts: list = []
+
+        def send(self, alert) -> None:  # noqa: ANN001
+            self.alerts.append(alert)
+
+        def close(self) -> None:
+            closes["n"] += 1
+
+    # Point siem at a webhook so run_loop builds a sink.
+    config = make_app_config(tmp_path, platform="jsonl", interval_seconds=1, every_cycles=1)
+    config = config.model_copy(
+        update={"siem": config.siem.model_copy(update={"kind": "webhook", "endpoint": "https://x.test"})}
+    )
+
+    class FakeCollector:
+        def collect(self):
+            return iter(list(benign_events))
+
+    monkeypatch.setattr("behavior_anomaly.daemon.build_collector", lambda *a, **kw: FakeCollector())
+    # Replace build_sink so we get our RecordingSink instead of a real httpx client.
+    monkeypatch.setattr("behavior_anomaly.daemon.build_sink", lambda _cfg: RecordingSink())
+
+    stop_event = threading.Event()
+
+    def fake_sleep(_s):
+        stop_event.set()
+
+    run_loop(config, stop_event=stop_event, sleep_func=fake_sleep)
+    assert builds["n"] == 1, "sink must be built once for the whole loop"
+    assert closes["n"] == 1, "sink must be closed when the loop exits"
+
+
+def test_monitor_cycle_advances_offset_even_when_a_send_fails(tmp_path, benign_events):
+    # If one alert's send raises, the offset must still advance past the
+    # scored batch and the remaining alerts must still ship — no duplicates.
+    config = make_app_config(tmp_path, platform="jsonl", every_cycles=999)
+
+    seed_events(config.daemon.events_file, 60)
+    from behavior_anomaly.models.persistence import save_model
+    from behavior_anomaly.pipeline import build_features, train_model
+
+    model = train_model(
+        JsonlStore(config.daemon.events_file).read(),
+        config.detection,
+        features=build_features(config),
+    )
+    save_model(model, config.daemon.model_file)
+
+    # A stub model that always scores above threshold, so every window alerts
+    # and the partial-send path is actually exercised (the real IsolationForest
+    # scores its own training data as normal and would produce zero alerts).
+    from collections.abc import Sequence
+
+    from behavior_anomaly.models.base import AnomalyModel
+
+    class AlwaysAnomalous(AnomalyModel):
+        name = "always"
+
+        def fit(self, rows: Sequence[dict[str, float]]) -> None:
+            pass
+
+        def score(self, row: dict[str, float]) -> float:
+            return 0.9
+
+    send_calls = {"n": 0}
+
+    class FlakySink(SiemSink):
+        def __init__(self) -> None:
+            self.sent: list = []
+
+        def send(self, alert) -> None:  # noqa: ANN001
+            send_calls["n"] += 1
+            if send_calls["n"] == 1:
+                raise RuntimeError("transient SIEM hiccup")
+            self.sent.append(alert)
+
+    class FakeCollector:
+        def collect(self):
+            return iter([])
+
+    with patch("behavior_anomaly.daemon.build_collector", return_value=FakeCollector()), patch(
+        "behavior_anomaly.daemon.load_model", return_value=AlwaysAnomalous()
+    ):
+        state = DaemonState(cycle=5)
+        sink = FlakySink()
+        result = run_cycle(config, state, sink=sink)
+
+    # 60 events in two windows; both alert with the stub model.
+    assert result.scored == 60
+    assert result.alerts == 1  # only the second alert actually shipped
+    # The offset advanced past the whole scored batch regardless of the failure.
+    assert state.byte_offset > 0
+    # The first send raised; the second still shipped.
+    assert send_calls["n"] == 2
+    assert len(sink.sent) == 1
+
+
+def test_run_cycle_jsonl_collector_unpatched(tmp_path, benign_events):
+    # The daemon's jsonl collector path used to be impossible to exercise
+    # without patching build_collector, because there was no source field.
+    # Now DaemonCollectConfig.source wires the path through.
+    source = tmp_path / "agent.jsonl"
+    JsonlStore(source).write(benign_events)
+    config = make_app_config(tmp_path, platform="jsonl", every_cycles=1)
+    config = config.model_copy(
+        update={
+            "daemon": config.daemon.model_copy(
+                update={"collect": config.daemon.collect.model_copy(update={"source": str(source)})}
+            )
+        }
+    )
+    result = run_cycle(config, DaemonState(), sink=FakeSink())
+    assert result.collected == 60
+    assert Path(config.daemon.events_file).exists()
+
+
+def test_run_cycle_retrain_cadence_lines_up_with_reported_cycle(tmp_path, benign_events):
+    # should_retrain is decided on the cycle we are about to run, before the
+    # increment, so the scheduled cadence matches the cycle number reported
+    # in CycleResult. every_cycles=1 means every cycle trains.
+    config = make_app_config(tmp_path, platform="jsonl", every_cycles=1)
+
+    class FakeCollector:
+        def __init__(self):
+            self._events = list(benign_events)
+
+        def collect(self):
+            return iter(self._events)
+
+    with patch("behavior_anomaly.daemon.build_collector", return_value=FakeCollector()):
+        state = DaemonState(cycle=0)
+        first = run_cycle(config, state, sink=FakeSink())
+        assert first.cycle == 0
+        assert first.trained is True  # cycle 0 % 1 == 0
+        # Second cycle (no new events, model exists): scheduled retrain still fires.
+        second = run_cycle(config, state, sink=FakeSink())
+        assert second.cycle == 1
+        assert second.trained is True  # 1 % 1 == 0
+
+
 def test_run_loop_exits_on_signal_mid_sleep(tmp_path):
     """Setting stop_event during sleep should wake the loop promptly."""
     config = make_app_config(

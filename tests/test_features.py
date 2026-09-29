@@ -153,3 +153,122 @@ def test_sloppy_metadata_coerces_to_zero():
     # A mouse that moved "a lot" for "a while" moved zero pixels, quietly.
     assert row["mouse_distance_px"] == 0.0
     assert row["mouse_speed_px_s"] == 0.0
+
+
+# --------------------------------------------------- feature hardening
+
+
+def test_nan_and_inf_metadata_coerce_to_zero():
+    # float("nan")/float("inf") succeed at float() but would poison the
+    # feature vector and crash sklearn. _num must reject non-finite values.
+    import math
+
+    events = [
+        make_event(
+            event_type=EventType.INPUT,
+            action="typing",
+            process_name=None,
+            metadata={"keystrokes": "nan", "mean_interval_ms": "inf"},
+        )
+    ]
+    row = BehavioralFeatures().extract(events)
+    assert row["keystrokes"] == 0.0
+    assert math.isfinite(row["mean_key_interval_ms"])
+    assert all(math.isfinite(v) for v in row.values())
+
+
+def test_extract_handles_unsorted_input():
+    # The public extract API has no documented ordering precondition, but the
+    # span math used to assume events[0] was earliest. Reverse-order input
+    # must still produce a correct, finite velocity.
+    events = [
+        make_event(
+            seconds_offset=60,
+            event_type=EventType.INPUT,
+            action="typing",
+            process_name=None,
+            metadata={"keystrokes": 120, "mean_interval_ms": 100},
+        ),
+        make_event(
+            seconds_offset=0,
+            event_type=EventType.INPUT,
+            action="typing",
+            process_name=None,
+            metadata={"keystrokes": 60, "mean_interval_ms": 200},
+        ),
+    ]
+    row = BehavioralFeatures().extract(events)
+    assert row["keystrokes"] == 180.0
+    # Span is 60s; 180 keys / 60s = 180 kpm.
+    assert row["typing_velocity_kpm"] == 180.0
+
+
+def test_typing_velocity_uses_active_duration_when_present():
+    # When typing events carry duration_ms, velocity is normalized by active
+    # typing time (matching mouse speed), not the full window span.
+    events = [
+        make_event(
+            seconds_offset=0,
+            event_type=EventType.INPUT,
+            action="typing",
+            process_name=None,
+            metadata={"keystrokes": 120, "duration_ms": 2000},  # 2s of typing
+        ),
+        # Non-typing padding so the window span is much larger than 2s.
+        make_event(seconds_offset=10, event_type=EventType.PROCESS, action="exec"),
+        make_event(seconds_offset=20, event_type=EventType.PROCESS, action="exec"),
+    ]
+    row = BehavioralFeatures().extract(events)
+    # 120 keys in 2 seconds of active typing = 3600 kpm, not the ~360 kpm
+    # the old window-span normalization would have reported.
+    assert row["typing_velocity_kpm"] == 3600.0
+
+
+def test_partial_metadata_does_not_drag_mean_toward_zero():
+    # One typing event with keystrokes but no mean_interval_ms must not
+    # contribute its keystrokes to the denominator of the weighted mean.
+    events = [
+        make_event(
+            seconds_offset=0,
+            event_type=EventType.INPUT,
+            action="typing",
+            process_name=None,
+            metadata={"keystrokes": 120, "mean_interval_ms": 100},
+        ),
+        make_event(
+            seconds_offset=60,
+            event_type=EventType.INPUT,
+            action="typing",
+            process_name=None,
+            metadata={"keystrokes": 1000},  # no mean_interval_ms
+        ),
+    ]
+    row = BehavioralFeatures().extract(events)
+    # Only the first event carries mean_interval_ms, so the mean is exactly
+    # its value — not dragged down by the 1000 keystrokes that have none.
+    assert row["mean_key_interval_ms"] == 100.0
+
+
+def test_input_features_never_leak_content_values():
+    # The old privacy test asserted feature *names* do not contain "text",
+    # which is trivially true. This one asserts the secret value never
+    # appears in any output value either.
+    events = [
+        make_event(
+            event_type=EventType.INPUT,
+            action="typing",
+            process_name=None,
+            metadata={
+                "keystrokes": "42",
+                "mean_interval_ms": 110,
+                "sampled_text": "hunter2",
+                "keys_pressed": "h,u,n,t,e,r,2",
+            },
+        )
+    ]
+    row = BehavioralFeatures().extract(events)
+    for value in row.values():
+        assert "hunter2" not in str(value)
+    # And the whitelisted keys are exactly the feature set.
+    assert "sampled_text" not in row
+    assert "keys_pressed" not in row
