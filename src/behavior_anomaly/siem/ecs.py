@@ -15,14 +15,38 @@ _SEVERITY_NUMBERS: dict[str, int] = {
     "critical": 100,
 }
 
+# Map our normalized event types onto ECS event.category values. Evidence is
+# "type:action" strings, so the first token of each evidence line tells us
+# what categories the window actually contained — better than a hard-coded
+# list that misroutes alerts whose window was, say, only authentication.
+_EVENT_TYPE_TO_ECS_CATEGORY: dict[str, str] = {
+    "process": "process",
+    "auth": "authentication",
+    "session": "session",
+    "file": "file",
+    "network": "network",
+    "shell": "process",
+    "privilege": "authentication",
+    "application": "application",
+    "input": "process",
+}
 
-def to_ecs(alert: Alert) -> dict:
-    """Render an Alert as an ECS-shaped dict, ready for SIEM ingestion."""
+
+def to_ecs(alert: Alert) -> dict[str, object]:
+    """Render an Alert as an ECS-shaped dict, ready for SIEM ingestion.
+
+    `event.category` is derived from the alert's evidence (the event types
+    actually present in the window) rather than hard-coded, so an alert whose
+    window contained only auth events is categorized as authentication, not
+    a fixed soup of every category. `event.type` reflects the verdict: an
+    anomaly alert is an `info`-with-an-anomaly-kind, by ECS convention.
+    """
+    categories = _categories_from_evidence(alert.evidence)
     return {
         "@timestamp": alert.timestamp.isoformat(),
         "event": {
             "kind": "alert",
-            "category": ["authentication", "process", "network"],
+            "category": categories,
             "type": ["info"],
             "severity": _severity_number(alert.severity),
         },
@@ -41,6 +65,17 @@ def to_ecs(alert: Alert) -> dict:
         },
         "rule": {"name": alert.rule},
     }
+
+
+def _categories_from_evidence(evidence: list[str]) -> list[str]:
+    """Distinct ECS categories for the event types in the evidence list."""
+    seen: list[str] = []
+    for item in evidence:
+        event_type = item.split(":", 1)[0]
+        category = _EVENT_TYPE_TO_ECS_CATEGORY.get(event_type)
+        if category and category not in seen:
+            seen.append(category)
+    return seen or ["process"]
 
 
 def _severity_number(severity: Severity) -> int:
