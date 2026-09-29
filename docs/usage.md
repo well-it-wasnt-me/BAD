@@ -175,10 +175,16 @@ save_model(model, "model.joblib")
 # Score
 alerts = detect(JsonlStore("new-events.jsonl").read(), load_model("model.joblib"), config)
 
-# Ship
+# Ship. Sinks take an Alert (they serialize themselves); to_ecs is for
+# consumers that want the ECS dict directly, not for sink.send.
 sink = build_sink(SiemConfig(kind="webhook", endpoint="https://siem.example.test/hook"))
 for alert in alerts:
-    sink.send(to_ecs(alert))
+    sink.send(alert)
+sink.close()  # release the httpx connection pool when you are done
+
+# ECS rendering is separate: use it when you ship to a consumer that wants
+# the Elastic Common Schema dict rather than the native Alert.
+ecs_records = [to_ecs(alert) for alert in alerts]
 ```
 
 ## Tuning advice, free of charge

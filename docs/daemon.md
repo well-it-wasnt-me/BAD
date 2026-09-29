@@ -104,8 +104,8 @@ Type=simple
 ExecStart=/usr/local/bin/bad daemon --config /etc/bad/config.toml
 Restart=on-failure
 RestartSec=30
-User=bad
-Group=bad
+User=badsvc
+Group=badsvc
 
 [Install]
 WantedBy=multi-user.target
@@ -117,7 +117,8 @@ sudo systemctl enable --now bad-daemon
 
 The daemon needs read access to the systemd journal (for the linux
 collector) and write access to `events_file` and `model_file`. A dedicated
-`bad` user with appropriate permissions is the boring, correct answer.
+`badsvc` user with appropriate permissions is the boring, correct answer,
+and the name the deploy templates in `deploy/` use.
 
 ### cron (any platform)
 

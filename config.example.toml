@@ -24,10 +24,16 @@ min_events = 5
 # Where alerts go. "syslog" (structured JSON through the local syslog,
 # works everywhere) or "webhook" (HTTP POST, needs an endpoint).
 kind = "syslog"
-# webhook only: the URL that receives alert POSTs.
+# webhook only: the URL that receives alert POSTs. Must be http(s) and, by
+# default, must not target a private/loopback/link-local address — a
+# security product shipping its bearer token to 169.254.169.254 is the kind
+# of mistake that ends careers.
 # endpoint = "https://siem.example.com/api/ingest"
 # webhook only: bearer token for the endpoint.
 # api_key = "change-me"
+# Opt out of the private/loopback endpoint guard for air-gapped lab setups.
+# Leave false in production.
+# allow_private_endpoint = false
 
 [input_dynamics]
 # Include typing and mouse motion features in the anomaly model. These are
@@ -79,9 +85,13 @@ enabled = true
 # Collector to use. Omit to auto-detect from the running OS.
 # Explicit options: "linux", "windows", "macos", "jsonl".
 # platform = "linux"
-# Time window for the collector. For linux this becomes `journalctl --since`.
+# Time window for the linux collector. Becomes `journalctl --since`.
 # Defaults to one interval back so we overlap and never miss the boundary.
 since = "5 minutes ago"
+# Path for the jsonl collector. Set this when platform = "jsonl" so the
+# daemon reads normalized events from a file an external agent writes,
+# instead of shelling out to an OS collector. Ignored for other platforms.
+# source = "/var/lib/bad/agent-events.jsonl"
 
 [daemon.train]
 # Retrain the model from accumulated events so it drifts with the user

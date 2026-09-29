@@ -132,9 +132,12 @@ check_architecture() {
 
     # Mount the dmg temporarily to inspect the binary inside it. We detach
     # immediately after, because leaving volumes mounted is how one-liners
-    # become postmortems.
+    # become postmortems. A fixed mountpoint avoids parsing the volume name,
+    # which breaks on dmg names containing spaces.
     local mount_point
-    mount_point=$(hdiutil attach "$DMG" -nobrowse -quiet | tail -1 | awk '{print $NF}')
+    mount_point="/tmp/bad-dmg-$$"
+    hdiutil attach "$DMG" -nobrowse -quiet -mountpoint "$mount_point" >/dev/null 2>&1 \
+      || fail "Could not mount $DMG."
     trap 'hdiutil detach "$mount_point" -quiet >/dev/null 2>&1 || true' EXIT
 
     if [[ ! -f "$mount_point/bad" ]]; then
@@ -271,8 +274,11 @@ install_binary() {
 
     # Mount, copy, unmount. The trap from check_architecture already detaches,
     # but we do our own mount here in case check_architecture returned early.
+    # Fixed mountpoint so a volume name with spaces does not break parsing.
     local mount_point
-    mount_point=$(hdiutil attach "$DMG" -nobrowse -quiet | tail -1 | awk '{print $NF}')
+    mount_point="/tmp/bad-dmg-$$"
+    hdiutil attach "$DMG" -nobrowse -quiet -mountpoint "$mount_point" >/dev/null 2>&1 \
+      || fail "Could not mount $DMG."
     [[ -f "$mount_point/bad" ]] || { hdiutil detach "$mount_point" -quiet 2>/dev/null || true; fail "No bad binary inside the dmg."; }
 
     cp "$mount_point/bad" "$bin_path"
@@ -332,14 +338,16 @@ install_config() {
         fi
     else
         # Try to extract the example from the dmg first (offline-friendly),
-        # then fall back to downloading from the repo.
+        # then fall back to downloading from the repo. Fixed mountpoint so a
+        # volume name with spaces does not break the path.
         local mount_point
-        mount_point=$(hdiutil attach "$DMG" -nobrowse -quiet 2>/dev/null | tail -1 | awk '{print $NF}' || true)
-        if [[ -n "$mount_point" ]] && [[ -f "$mount_point/config.example.toml" ]]; then
-            cp "$mount_point/config.example.toml" "$config_path"
+        mount_point="/tmp/bad-dmg-cfg-$$"
+        if hdiutil attach "$DMG" -nobrowse -quiet -mountpoint "$mount_point" >/dev/null 2>&1; then
+            if [[ -f "$mount_point/config.example.toml" ]]; then
+                cp "$mount_point/config.example.toml" "$config_path"
+            fi
             hdiutil detach "$mount_point" -quiet 2>/dev/null || true
         else
-            [[ -n "$mount_point" ]] && hdiutil detach "$mount_point" -quiet 2>/dev/null || true
             if command_exists curl; then
                 curl -sSfL "https://github.com/well-it-wasnt-me/BAD/raw/main/config.example.toml" -o "$config_path"
             elif command_exists wget; then

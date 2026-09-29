@@ -15,9 +15,6 @@ pilot machine, then push to the fleet with the templates in `deploy/`.
 Daemon deployment specifics are in
 [Continuous Monitoring Daemon](daemon.md).
 
-What follows is the whole ceremony: prerequisites, install, verify on one
-pilot machine, then push to the fleet with the templates in `deploy/`.
-
 ## 1. Prerequisites per platform
 
 Install everything **unprivileged**. BAD never wants root, and a security

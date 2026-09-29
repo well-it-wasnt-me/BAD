@@ -25,7 +25,12 @@ CONFIG_DIR="${CONFIG_DIR:-/etc/bad}"
 
 # --- 1. Mount, copy, unmount --------------------------------------------------
 
-mount_point=$(hdiutil attach "$DMG" -nobrowse -quiet | tail -1 | awk '{print $NF}')
+# Mount to a known path so a volume name containing spaces (e.g. "/Volumes/
+# BAD 1.2.0") does not break the awk-on-last-field parsing that bit earlier
+# versions of this script. A fixed mountpoint means we never parse the path.
+mount_point="/tmp/bad-dmg-$$"
+hdiutil attach "$DMG" -nobrowse -quiet -mountpoint "$mount_point" >/dev/null 2>&1 \
+  || { echo "Could not mount $DMG." >&2; exit 1; }
 trap 'hdiutil detach "$mount_point" -quiet >/dev/null 2>&1 || true' EXIT
 
 # The dmg contains the bad executable. Copy, do not run from the mount,

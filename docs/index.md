@@ -8,9 +8,11 @@ to be users. This package learns what normal looks like on your fleet, scores
 new behavior against it, and when a user starts doing things they never do,
 it hands a vendor-neutral alert to your SIEM and lets the humans argue.
 
-It is a **tool, not an agent**. It has no daemon, no heartbeat, no management
+It is a **tool, not an agent (but it can loop)**. No heartbeat, no management
 console. It is the math and the glue: collectors in, alerts out, and anything
-in between is your call.
+in between is your call. Run it one-shot from cron, or run `bad daemon` for
+the always-on collect/score/retrain loop — your call, not a sidecar we forced
+on you.
 
 ## What it does
 

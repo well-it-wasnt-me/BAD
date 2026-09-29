@@ -8,7 +8,11 @@
 - name: Ensure auditd is installed and running (the good telemetry)
   when: bad_ensure_auditd | bool
   ansible.builtin.package:
-    name: audit
+    # Debian/Ubuntu ship the userspace daemon in `auditd`; RHEL/Fedora split
+    # it across `audit` and `auditd`. Install the right one for the family so
+    # the follow-on systemd task does not fail on a box where auditd is not
+    # actually installed.
+    name: "{{ (ansible_os_family == 'Debian') | ternary('auditd', 'audit') }}"
     state: present
 
 - name: Ensure auditd is enabled at boot
