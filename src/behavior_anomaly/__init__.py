@@ -7,7 +7,7 @@ The import package stays behavior_anomaly so nobody has to type
 `from bad import Alert` with a straight face.
 """
 
-__version__ = "2.0.0"
+__version__ = "2.0.1"
 
 # Lazy re-exports. Importing this package used to drag in sklearn, numpy and
 # joblib eagerly, so even `bad --help` and `bad check-config` paid the full
