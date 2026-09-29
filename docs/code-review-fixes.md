@@ -4,6 +4,10 @@ Outcome of the full code review. Each phase is independently shippable and
 ends with a green test suite. Findings are referenced by ID from the review
 report (C=critical, H=high, M=medium, L=low, T=test).
 
+**Status: all phases executed.** 128 → 181 tests, ruff + mypy clean.
+See the commit history for per-phase detail. Items below are checked off as
+done; the one explicitly deferred item is noted inline.
+
 ## Phase 1 — SIEM & daemon robustness (C1, H5, H6, H8, H9, H10, H13, M5)
 
 - **C1** `webhook.py`: assert 2xx explicitly; enable `follow_redirects=True`.

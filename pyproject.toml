@@ -60,6 +60,11 @@ bad = "behavior_anomaly.cli:app"
 [tool.hatch.build.targets.wheel]
 packages = ["src/behavior_anomaly"]
 
+# Ship the example config so a pip-installed user can copy it without
+# fetching it from GitHub. It lands at the wheel root next to the package.
+[tool.hatch.build.targets.wheel.force-include]
+"config.example.toml" = "config.example.toml"
+
 # Lint and formatting. 120 columns, same as the rest of this project's docs.
 [tool.ruff]
 line-length = 120
